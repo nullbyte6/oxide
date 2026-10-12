@@ -716,7 +716,7 @@ fn draw_palette(f: &mut Frame, app: &mut App) {
     f.render_widget(Paragraph::new(query), query_row);
 
     if found.is_empty() {
-        let msg = if app.palette.query.is_empty() { "Type to search commands…" } else { "No command matches." };
+        let msg = if app.palette.query.is_empty() { "Try typing..." } else { "No command matches." };
         f.render_widget(Paragraph::new(msg).style(DIM.add_modifier(Modifier::ITALIC)), list_area);
         return;
     }
