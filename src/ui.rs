@@ -18,9 +18,11 @@ use ratatui::{
 use crate::{
     app::{App, Filter, Focus, InputKind, Mode},
     banner,
+    diff::{Row, Sign},
     git::FileEntry,
     logger::{self, Level},
     repo::{Health, Owner, Repo},
+    syntax::Tok,
 };
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -97,6 +99,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_details(f, app, right);
     draw_log(f, app, log);
     draw_footer(f, app, footer);
+    if app.mode == Mode::Diff {
+        draw_diff(f, app);
+    }
     if app.mode == Mode::Help {
         draw_help(f);
     }
@@ -411,6 +416,22 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    if app.mode == Mode::Diff {
+        let both = app.diff.as_ref().is_some_and(|v| v.both);
+        let mut hints = vec![("↑↓", "scroll"), ("Space", "page"), ("[ ]", "hunk"), ("← →", "pan"), ("g G", "top/end")];
+        if both {
+            hints.push(("Tab", "staged/unstaged"));
+        }
+        hints.push(("Esc", "close"));
+        let mut spans = Vec::new();
+        for (key, what) in hints {
+            spans.push(Span::styled(format!(" {key} "), hue(KEYCAP, ACCENT)));
+            spans.push(Span::styled(format!(" {what}  "), DIM));
+        }
+        f.render_widget(Paragraph::new(Line::from(spans)), area);
+        return;
+    }
+
     if app.mode == Mode::Confirm {
         let prompt = app.confirm.as_ref().map_or("", |c| c.prompt.as_str());
         let line = Line::from(vec![Span::styled(format!(" {prompt} "), hue(BOLD, WARN)), Span::styled(" y ", hue(KEYCAP, WARN)), Span::styled(" yes   any other key cancels", DIM)]);
@@ -423,6 +444,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         ("Tab", "pane"),
         ("f", "filter"),
         ("s", "sort"),
+        ("d", "diff"),
         ("/", "search"),
         ("Space", "stage"),
         ("c", "commit"),
@@ -441,6 +463,95 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
+/// Style of a highlighted token. With colors off only the weight differs: bold keywords and
+/// dim italic comments.
+fn tok_style(t: Tok) -> Style {
+    match t {
+        Tok::Plain => PLAIN,
+        Tok::Keyword => hue(BOLD, PINK),
+        Tok::Type => hue(PLAIN, WARN),
+        Tok::Func | Tok::Key => hue(PLAIN, Color::LightBlue),
+        Tok::Str => hue(PLAIN, GOOD),
+        Tok::Number | Tok::Const => hue(PLAIN, Color::LightRed),
+        Tok::Macro => hue(PLAIN, ACCENT),
+        Tok::Comment if COLOR.load(Ordering::Relaxed) => ITALIC.fg(Color::DarkGray),
+        Tok::Comment => DIM.add_modifier(Modifier::ITALIC),
+    }
+}
+
+/// The code of a diff line as spans, with the first `skip` columns scrolled out of view.
+fn code_spans(toks: &[(Tok, String)], mut skip: usize) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    for (tok, text) in toks {
+        let n = text.chars().count();
+        if skip >= n {
+            skip -= n;
+            continue;
+        }
+        spans.push(Span::styled(text.chars().skip(skip).collect::<String>(), tok_style(*tok)));
+        skip = 0;
+    }
+    spans
+}
+
+fn diff_line(row: &Row, num_w: usize, hscroll: usize) -> Line<'static> {
+    let blank = " ".repeat(num_w * 2 + 2);
+    match row {
+        Row::Meta(s) | Row::Note(s) => Line::from(Span::styled(format!("{blank}{s}"), DIM.add_modifier(Modifier::ITALIC))),
+        Row::Hunk(s) => Line::from(Span::styled(format!("{blank}{s}"), hue(BOLD, ACCENT))),
+        Row::Line { sign, old, new, toks } => {
+            let num = |n: &Option<u32>| n.map_or_else(|| " ".repeat(num_w), |n| format!("{n:>num_w$}"));
+            let (mark, style) = match sign {
+                Sign::Add => (" + ", hue(PLAIN.add_modifier(Modifier::REVERSED).add_modifier(Modifier::BOLD), GOOD)),
+                Sign::Del => (" - ", hue(PLAIN.add_modifier(Modifier::REVERSED).add_modifier(Modifier::BOLD), BAD)),
+                Sign::Ctx => ("   ", PLAIN),
+            };
+            let mut spans = vec![Span::styled(format!("{} {} ", num(old), num(new)), DIM), Span::styled(mark, style), Span::raw(" ")];
+            spans.extend(code_spans(toks, hscroll));
+            Line::from(spans)
+        }
+    }
+}
+
+/// The diff viewer: a full-screen panel over the dashboard.
+fn draw_diff(f: &mut Frame, app: &mut App) {
+    let [area, _] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(f.area());
+    let Some(v) = app.diff.as_mut() else { return };
+    let name = v.repo.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let mut block = pane(format!(" Diff · {name}/{} · {} ", v.file, v.kind.label()), true);
+    v.height = area.height.saturating_sub(2) as usize;
+    f.render_widget(Clear, area);
+
+    let note = |msg: String, block: Block<'static>, f: &mut Frame| {
+        f.render_widget(Paragraph::new(msg).style(DIM.add_modifier(Modifier::ITALIC)).block(block), area);
+    };
+    if let Some(e) = &v.error {
+        return note(format!("git diff failed: {}", e.lines().next().unwrap_or("")), block, f);
+    }
+    let Some(d) = &v.diff else {
+        return note("Loading diff…".to_string(), block, f);
+    };
+    if d.rows.is_empty() {
+        return note("No textual changes.".to_string(), block, f);
+    }
+
+    v.scroll = v.scroll.min(d.rows.len().saturating_sub(v.height));
+    let last = (v.scroll + v.height).min(d.rows.len());
+    block = block.title_top(
+        Line::from(vec![
+            Span::styled(format!(" +{}", d.added), hue(BOLD, GOOD)),
+            Span::styled(format!(" −{}", d.removed), hue(BOLD, BAD)),
+            Span::styled(format!(" · {}-{last}/{} ", v.scroll + 1, d.rows.len()), DIM),
+        ])
+        .right_aligned(),
+    );
+    let mut lines: Vec<Line> = d.rows[v.scroll..last].iter().map(|r| diff_line(r, d.num_w, v.hscroll)).collect();
+    if d.truncated && last == d.rows.len() {
+        lines.push(Line::from(Span::styled("… diff cut off after the first rows", DIM.add_modifier(Modifier::ITALIC))));
+    }
+    f.render_widget(Paragraph::new(lines).block(block), area);
+}
+
 fn draw_help(f: &mut Frame) {
     let rows: &[(&str, &str)] = &[
         ("↑ ↓ / j k, g G", "move selection, first / last"),
@@ -456,6 +567,7 @@ fn draw_help(f: &mut Frame) {
         ("L / U", "pull every behind / push every ahead repository in view"),
         ("m", "merge a branch (empty = upstream)"),
         ("z / Z", "stash all changes / pop the latest stash"),
+        ("d", "diff of the highlighted file (in the viewer: Esc closes)"),
         ("e / t / o", "editor on the file or repository / shell / file manager"),
         ("* / x / H", "pin / ignore the repository / show ignored ones"),
         ("r / R", "reload selected repository / rescan all roots"),

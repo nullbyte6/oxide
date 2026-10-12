@@ -16,7 +16,8 @@ use ratatui::widgets::ListState;
 
 use crate::{
     config::Config,
-    git::Op,
+    diff::{self, Diff},
+    git::{DiffKind, Op},
     logger::{self, Level, Logger},
     marks::{Mark, Marks},
     repo::{Health, Owner, Repo},
@@ -123,6 +124,24 @@ impl Launch {
     }
 }
 
+/// The diff viewer: one file of one repository.
+pub struct DiffView {
+    pub repo: PathBuf,
+    pub file: String,
+    pub kind: DiffKind,
+    /// None while the diff is loading.
+    pub diff: Option<Diff>,
+    pub error: Option<String>,
+    /// First visible row, and how many columns the code is scrolled to the left.
+    pub scroll: usize,
+    pub hscroll: usize,
+    /// Rows that fit on screen; set by the renderer, used for page jumps.
+    pub height: usize,
+    /// True when the file has both staged and unstaged changes, so `Tab` can switch between them.
+    pub both: bool,
+    id: u64,
+}
+
 /// A bulk operation waiting for a yes.
 pub struct Confirm {
     pub prompt: String,
@@ -150,6 +169,8 @@ pub enum Mode {
     Input(InputKind),
     /// Waiting for `y` to run `App::confirm`.
     Confirm,
+    /// The diff viewer (`App::diff`) is open.
+    Diff,
     Help,
 }
 
@@ -186,6 +207,8 @@ pub struct App {
     pub tick: usize,
     pub quit: bool,
     pub confirm: Option<Confirm>,
+    pub diff: Option<DiffView>,
+    diff_id: u64,
     /// A terminal program requested by the user; taken and run by the event loop.
     pub launch: Option<Launch>,
     marks: Marks,
@@ -229,6 +252,8 @@ impl App {
             tick: 0,
             quit: false,
             confirm: None,
+            diff: None,
+            diff_id: 0,
             launch: None,
             logger: Logger::open(),
             scan_paths: HashSet::new(),
@@ -317,6 +342,14 @@ impl App {
                     self.rebuild();
                     self.log(Level::Ok, format!("scan finished: {} repositories in {ms} ms", self.repos.len()));
                 }
+                Msg::Diff { id, result } => {
+                    if let Some(view) = self.diff.as_mut().filter(|v| v.id == id) {
+                        match result {
+                            Ok(text) => view.diff = Some(diff::parse(&text, &view.file)),
+                            Err(e) => view.error = Some(e),
+                        }
+                    }
+                }
                 Msg::Op { path, label, result } => {
                     self.busy.remove(&path);
                     let name = dir_name(&path);
@@ -391,6 +424,7 @@ impl App {
             Mode::Help => self.mode = Mode::Normal,
             Mode::Input(kind) => self.on_input_key(kind, key),
             Mode::Confirm => self.on_confirm_key(key),
+            Mode::Diff => self.on_diff_key(key),
             Mode::Normal => self.on_normal_key(key),
         }
     }
@@ -421,6 +455,7 @@ impl App {
             KeyCode::Char('2') => self.set_filter(Filter::Owned),
             KeyCode::Char('3') => self.set_filter(Filter::Cloned),
             KeyCode::Char('4') => self.set_filter(Filter::Attention),
+            KeyCode::Char('d') => self.open_diff(),
             KeyCode::Char('s') => self.cycle_sort(),
             KeyCode::Char('C') => {
                 self.color = !self.color;
@@ -460,6 +495,83 @@ impl App {
                     self.focus = Focus::Files;
                 } else {
                     self.toggle_stage();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Opens the diff viewer on the highlighted file.
+    fn open_diff(&mut self) {
+        let Some(r) = self.selected() else { return };
+        let Some(f) = self.file_state.selected().and_then(|i| r.files.get(i)) else {
+            self.log(Level::Warn, "no changed file selected to diff");
+            return;
+        };
+        let kind = if f.untracked() {
+            DiffKind::Untracked
+        } else if f.unstaged() {
+            DiffKind::Unstaged
+        } else {
+            DiffKind::Staged
+        };
+        let both = f.staged() && f.unstaged() && !f.conflict();
+        let (repo, file) = (r.path.clone(), f.path.clone());
+        self.diff_id += 1;
+        self.diff = Some(DiffView {
+            repo: repo.clone(),
+            file: file.clone(),
+            kind,
+            diff: None,
+            error: None,
+            scroll: 0,
+            hscroll: 0,
+            height: 20,
+            both,
+            id: self.diff_id,
+        });
+        self.mode = Mode::Diff;
+        worker::spawn_diff(repo, file, kind, self.diff_id, self.tx.clone());
+    }
+
+    fn on_diff_key(&mut self, key: KeyEvent) {
+        let Some(v) = self.diff.as_mut() else {
+            self.mode = Mode::Normal;
+            return;
+        };
+        let page = v.height.saturating_sub(1).max(1);
+        let max = v.diff.as_ref().map_or(0, |d| d.rows.len().saturating_sub(v.height));
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q' | 'd') => {
+                self.diff = None;
+                self.mode = Mode::Normal;
+            }
+            KeyCode::Down | KeyCode::Char('j') => v.scroll = (v.scroll + 1).min(max),
+            KeyCode::Up | KeyCode::Char('k') => v.scroll = v.scroll.saturating_sub(1),
+            KeyCode::PageDown | KeyCode::Char(' ') => v.scroll = (v.scroll + page).min(max),
+            KeyCode::PageUp | KeyCode::Char('b') => v.scroll = v.scroll.saturating_sub(page),
+            KeyCode::Home | KeyCode::Char('g') => v.scroll = 0,
+            KeyCode::End | KeyCode::Char('G') => v.scroll = max,
+            KeyCode::Right | KeyCode::Char('l') => v.hscroll += 8,
+            KeyCode::Left | KeyCode::Char('h') => v.hscroll = v.hscroll.saturating_sub(8),
+            KeyCode::Char('0') => v.hscroll = 0,
+            KeyCode::Char(']' | 'n') => {
+                if let Some(d) = &v.diff {
+                    v.scroll = d.hunks.iter().copied().find(|&h| h > v.scroll).unwrap_or(v.scroll).min(max);
+                }
+            }
+            KeyCode::Char('[' | 'N') => {
+                if let Some(d) = &v.diff {
+                    v.scroll = d.hunks.iter().copied().rev().find(|&h| h < v.scroll).unwrap_or(0);
+                }
+            }
+            KeyCode::Tab | KeyCode::BackTab => {
+                if v.both {
+                    v.kind = if v.kind == DiffKind::Staged { DiffKind::Unstaged } else { DiffKind::Staged };
+                    self.diff_id += 1;
+                    v.id = self.diff_id;
+                    (v.diff, v.error, v.scroll, v.hscroll) = (None, None, 0, 0);
+                    worker::spawn_diff(v.repo.clone(), v.file.clone(), v.kind, v.id, self.tx.clone());
                 }
             }
             _ => {}

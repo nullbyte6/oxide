@@ -3,10 +3,12 @@
 mod app;
 mod banner;
 mod config;
+mod diff;
 mod git;
 mod logger;
 mod marks;
 mod repo;
+mod syntax;
 mod ui;
 mod worker;
 

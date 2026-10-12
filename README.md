@@ -22,6 +22,7 @@ screen, and lets you stage, commit, push, pull, fetch and merge without leaving 
 - **Owned vs cloned filter**: switch between *All*, *Owned*, *Cloned* and *Attention* (dirty, ahead, behind or broken) repositories.
 - **Sorting, pinning and hiding**: sort by name, last commit, changes or commits behind; pin favourites to the top and ignore noisy repositories.
 - **Git actions**: stage/unstage (per file or all), commit, push, pull, fetch (one repo or all), merge, stash and pop; pull or push every repository in view at once.
+- **Diff viewer with syntax highlighting**: read the staged, unstaged or untracked diff of any changed file with line numbers and per-language colors, without leaving Oxide.
 - **Jump out**: open the selected file or repository in your editor, a shell or the file manager.
 - **Non-blocking**: scans and git commands run on background threads; the UI never freezes.
 - **Search**: filter the list live by name, branch or path.
@@ -74,6 +75,7 @@ oxide [OPTIONS] [PATH...]
 | `C` | Toggle colors |
 | `/` | Search (live); `Esc` clears |
 | `Space` / `Enter` | Stage or unstage the highlighted file |
+| `d` | Open the diff viewer on the highlighted file (see below) |
 | `a` / `u` | Stage all / unstage all |
 | `c` | Commit staged changes (prompts for a message) |
 | `p` | Pull (fast-forward only) |
@@ -90,6 +92,25 @@ oxide [OPTIONS] [PATH...]
 | `r` / `R` | Reload the selected repository / rescan all roots |
 | `?` | Help |
 | `q`, `Ctrl+C` | Quit |
+
+### Diff viewer
+
+`d` opens the highlighted file's diff full screen: untracked files are shown as entirely added, and a file
+with both staged and unstaged changes starts with the unstaged part (`Tab` switches). Lines carry old and
+new line numbers, additions and deletions get a `+` / `-` marker, and the code is highlighted per
+language (Rust, Python, JavaScript/TypeScript, Go, C/C++, Java/Kotlin/C#, shell, TOML/INI, JSON, YAML,
+Markdown, HTML/XML, CSS, SQL, Lua and Ruby; other files stay plain). With colors off, only weight
+differs: bold keywords and dim italic comments.
+
+| Key | Action |
+| --- | --- |
+| `↑` `↓` / `j` `k` | Scroll one row |
+| `Space` / `PgDn`, `b` / `PgUp` | Page down / up |
+| `g` / `G` | Top / bottom |
+| `]` / `[` (or `n` / `N`) | Next / previous hunk |
+| `←` `→` / `h` `l`, `0` | Pan long lines, back to the left edge |
+| `Tab` | Staged / unstaged version, when the file has both |
+| `Esc`, `q`, `d` | Close |
 
 Row symbols: `↑n` ahead, `↓n` behind, `+` staged, `~` modified, `?` untracked, `!` conflicts, `$n` stashes;
 `★` marks a pinned repository and `⊘` an ignored one.
@@ -205,7 +226,9 @@ run in batch mode unless you set `core.sshCommand`, `GIT_SSH_COMMAND` or `GIT_SS
 | `src/main.rs` | CLI arguments, terminal setup, event loop |
 | `src/app.rs` | Application state and key handling |
 | `src/ui.rs` | Ratatui rendering |
-| `src/git.rs` | `git` CLI wrapper: status parsing and operations |
+| `src/git.rs` | `git` CLI wrapper: status parsing, operations and diffs |
+| `src/diff.rs` | Parses `git diff` output into rows for the diff viewer |
+| `src/syntax.rs` | Dependency-free syntax highlighter used by the diff viewer |
 | `src/repo.rs` | Repository model, discovery, owned/cloned classification |
 | `src/worker.rs` | Background scan and operation threads |
 | `src/config.rs` | Config file, roots and owner names |

@@ -19,6 +19,8 @@ All notable changes to Oxide are recorded here, newest version first.
 - Add stash and stash pop (`z` / `Z`) with a `$n` stash counter on rows and in the details pane.
 - Add `e` / `t` / `o` keys to open the selected file or repository in `$VISUAL` / `$EDITOR`, a shell or the file manager.
 - Add a color layer on top of the monochrome design: accent hues for focus, branches, owned/ahead/staged, modified, behind/conflicts/errors, untracked files and running operations, plus the banner's original colors. The weights, symbols and inverse selection stay as they were, so the monochrome look is unchanged with colors off. Toggle with `C`, `color = on|off` in the config, or `NO_COLOR`.
+- Add a diff viewer (`d`) with line numbers, hunk navigation, panning and staged/unstaged switching, loaded in the background; untracked files are shown as added.
+- Add a dependency-free syntax highlighter for the diff viewer covering Rust, Python, JS/TS, Go, C/C++, Java-like languages, shell, TOML, JSON, YAML, Markdown, HTML, CSS, SQL, Lua and Ruby.
 - Add bulk pull (`L`) and bulk push (`U`, asks for confirmation) for the repositories in view.
 
 ### Fixed

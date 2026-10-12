@@ -11,7 +11,7 @@ use std::{
 
 use crate::{
     config::Config,
-    git::{self, Op},
+    git::{self, DiffKind, Op},
     repo::{self, Repo},
 };
 
@@ -25,6 +25,8 @@ pub enum Msg {
     Repo(Repo),
     /// The scan loaded everything; carries the elapsed milliseconds.
     ScanDone(u128),
+    /// The diff text (or error) requested with the given id.
+    Diff { id: u64, result: Result<String, String> },
     /// An operation finished.
     Op { path: PathBuf, label: &'static str, result: Result<String, String> },
 }
@@ -68,5 +70,12 @@ pub fn spawn_ops(jobs: Vec<(PathBuf, Op)>, cfg: Arc<Config>, tx: Sender<Msg>) {
             let _ = tx.send(Msg::Op { path: path.clone(), label: op.label(), result });
             let _ = tx.send(Msg::Repo(repo::load(&path, &cfg)));
         });
+    });
+}
+
+/// Loads the diff of one file in the background; the id lets the app ignore stale answers.
+pub fn spawn_diff(repo: PathBuf, file: String, kind: DiffKind, id: u64, tx: Sender<Msg>) {
+    thread::spawn(move || {
+        let _ = tx.send(Msg::Diff { id, result: git::diff(&repo, &file, kind) });
     });
 }

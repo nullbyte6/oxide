@@ -210,6 +210,46 @@ pub fn status(repo: &Path) -> Result<Status, String> {
     Ok(st)
 }
 
+/// Which version of a file the diff viewer shows.
+#[derive(Clone, Copy, PartialEq)]
+pub enum DiffKind {
+    /// Working tree against the index.
+    Unstaged,
+    /// Index against HEAD.
+    Staged,
+    /// A file git does not track yet: shown as entirely added.
+    Untracked,
+}
+
+impl DiffKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            DiffKind::Unstaged => "unstaged",
+            DiffKind::Staged => "staged",
+            DiffKind::Untracked => "untracked",
+        }
+    }
+}
+
+/// Unified diff text of `file` in `repo` (no color, no external diff tool, no rename detection).
+pub fn diff(repo: &Path, file: &str, kind: DiffKind) -> Result<String, String> {
+    let base = ["-c", "core.quotepath=off", "diff", "--no-color", "--no-ext-diff", "--no-renames"];
+    match kind {
+        DiffKind::Unstaged => run(repo, &[&base[..], &["--", file]].concat()),
+        DiffKind::Staged => run(repo, &[&base[..], &["--cached", "--", file]].concat()),
+        DiffKind::Untracked if file.ends_with('/') => {
+            // Git lists a wholly untracked directory as one entry; show what is inside it.
+            let list = run(repo, &["ls-files", "--others", "--exclude-standard", "--", file])?;
+            Ok(format!("untracked directory {file}\n{list}"))
+        }
+        // `--no-index` exits with 1 when the files differ, which is the normal case here.
+        DiffKind::Untracked => {
+            let (_, out, err) = exec(repo, &[&base[..], &["--no-index", "--", "/dev/null", file]].concat())?;
+            if out.is_empty() && !err.is_empty() { Err(err) } else { Ok(out) }
+        }
+    }
+}
+
 /// Runs `op` in `repo`; the Ok/Err text is the command output for the log.
 pub fn perform(repo: &Path, op: &Op) -> Result<String, String> {
     match op {
