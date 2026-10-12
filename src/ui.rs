@@ -1,11 +1,14 @@
 //! Rendering of the dashboard with Ratatui.
+//!
+//! The design is monochrome: one ink color on the terminal's own background. Hierarchy and
+//! state come from bold, dim and inverse text, thick borders and symbols, never from hues.
 
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style, Stylize},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Clear, List, ListItem, Padding, Paragraph, Tabs},
+    widgets::{Block, BorderType, Clear, List, ListItem, Padding, Paragraph, Tabs},
 };
 
 use crate::{
@@ -17,33 +20,55 @@ use crate::{
 };
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const ACCENT: Color = Color::Cyan;
 
-/// Rows the dashboard needs below the banner; on shorter terminals the banner is hidden.
-const MIN_DASHBOARD_ROWS: u16 = 24;
+/// The one color of the whole interface. `Reset` is the terminal's own foreground;
+/// set any other color here to recolor all of Oxide at once.
+const INK: Color = Color::Reset;
 
-/// Inner side padding of every panel. A terminal cell is about twice as tall as it is wide,
-/// so one column of padding makes the sides look as thick as the one-row top and bottom borders.
+const PLAIN: Style = Style::new().fg(INK);
+const BOLD: Style = PLAIN.add_modifier(Modifier::BOLD);
+const DIM: Style = PLAIN.add_modifier(Modifier::DIM);
+const ITALIC: Style = PLAIN.add_modifier(Modifier::ITALIC);
+/// Selection and active tab: swaps ink and background.
+const INVERSE: Style = PLAIN.add_modifier(Modifier::REVERSED).add_modifier(Modifier::BOLD);
+/// Selection in a pane that does not have focus: inverse, but faded.
+const INVERSE_DIM: Style = PLAIN.add_modifier(Modifier::REVERSED).add_modifier(Modifier::DIM);
+/// Key caps in the footer.
+const KEYCAP: Style = PLAIN.add_modifier(Modifier::REVERSED);
+
+/// Empty columns between side-by-side panels and empty rows between stacked panels.
+/// A terminal cell is about twice as tall as it is wide, so the 2 adjacent border columns with
+/// a 1-column gap are as far apart as 2 stacked border rows with no gap.
+const GAP_X: u16 = 1;
+const GAP_Y: u16 = 0;
+
+/// Inner side padding of every panel (same cell-ratio reasoning: the sides get a column of
+/// padding to match the one-row borders on top and bottom).
 const SIDE_PAD: u16 = 1;
 
+/// Rows the dashboard needs besides the banner; on shorter terminals the banner is hidden.
+const MIN_DASHBOARD_ROWS: u16 = 24;
+
 pub fn draw(f: &mut Frame, app: &mut App) {
+    // Paint the ink color over the whole screen so text without an explicit style uses it too.
+    f.render_widget(Block::new().style(PLAIN), f.area());
+
+    let [mut area, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(f.area());
+
     let banner = banner::get();
     let banner_h = banner.lines.len() as u16;
-    let show_banner = banner_h > 0 && f.area().height >= banner_h + MIN_DASHBOARD_ROWS && f.area().width >= banner.width;
-    let [banner_area, header, body, log, footer] = Layout::vertical([
-        Constraint::Length(if show_banner { banner_h } else { 0 }),
-        Constraint::Length(3),
-        Constraint::Min(8),
-        Constraint::Length(8),
-        Constraint::Length(1),
-    ])
-    .areas(f.area());
-    if show_banner {
+    if banner_h > 0 && f.area().height >= banner_h + GAP_Y + MIN_DASHBOARD_ROWS && f.area().width >= banner.width {
+        let [banner_area, rest] = Layout::vertical([Constraint::Length(banner_h), Constraint::Min(0)]).spacing(GAP_Y).areas(area);
         // Center the art as one block so its lines stay aligned with each other.
         let [_, art, _] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(banner.width), Constraint::Fill(1)]).areas(banner_area);
         f.render_widget(Paragraph::new(banner.lines.clone()), art);
+        area = rest;
     }
-    let [left, right] = Layout::horizontal([Constraint::Percentage(54), Constraint::Percentage(46)]).areas(body);
+
+    let [header, body, log] =
+        Layout::vertical([Constraint::Length(3), Constraint::Min(8), Constraint::Length(8)]).spacing(GAP_Y).areas(area);
+    let [left, right] =
+        Layout::horizontal([Constraint::Percentage(54), Constraint::Fill(1)]).spacing(GAP_X).areas(body);
 
     draw_header(f, app, header);
     draw_repos(f, app, left);
@@ -55,10 +80,20 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 }
 
-/// Block with a border that is highlighted while its pane has focus.
+/// Panel frame: a thick bold border while the pane has focus, a thin dim one otherwise.
+/// The title sits in a `─┤ title ├─` notch.
 fn pane(title: String, focused: bool) -> Block<'static> {
-    let color = if focused { ACCENT } else { Color::DarkGray };
-    Block::bordered().padding(Padding::horizontal(SIDE_PAD)).border_style(Style::new().fg(color)).title(Span::styled(title, Style::new().fg(color).bold()))
+    let (border, style) = if focused { (BorderType::Thick, BOLD) } else { (BorderType::Plain, DIM) };
+    let title = Line::from(vec![
+        Span::styled("─┤ ", style),
+        Span::styled(title.trim().to_string(), style),
+        Span::styled(" ├", style),
+    ]);
+    Block::bordered()
+        .border_type(border)
+        .padding(Padding::horizontal(SIDE_PAD))
+        .border_style(style)
+        .title(title)
 }
 
 /// Truncates (with `…`) or pads `s` to exactly `w` characters.
@@ -73,34 +108,51 @@ fn fit(s: &str, w: usize) -> String {
     }
 }
 
-fn health_color(h: Health) -> Color {
+/// Status symbol of a repository row: `○` clean, `●` dirty, `✖` conflict or error.
+fn health_symbol(h: Health) -> &'static str {
     match h {
-        Health::Clean => Color::Green,
-        Health::Dirty => Color::Yellow,
-        Health::Conflict | Health::Error => Color::Red,
+        Health::Clean => "○",
+        Health::Dirty => "●",
+        Health::Conflict | Health::Error => "✖",
     }
+}
+
+/// Progress bar of `width` cells, e.g. `▰▰▰▱▱▱▱▱▱▱`.
+fn bar(done: usize, total: usize, width: usize) -> String {
+    let filled = (done * width).checked_div(total).unwrap_or(0).min(width);
+    format!("{}{}", "▰".repeat(filled), "▱".repeat(width - filled))
 }
 
 fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let dirty = app.repos.iter().filter(|r| r.health() != Health::Clean).count();
     let ahead = app.repos.iter().filter(|r| r.ahead > 0).count();
     let behind = app.repos.iter().filter(|r| r.behind > 0).count();
+    let spin = SPINNER[app.tick % SPINNER.len()];
 
-    let mut right = vec![Span::raw(format!(
-        " {} repos · {dirty} dirty · {ahead} ahead · {behind} behind ",
-        app.repos.len()
-    ))];
-    if let Some((done, total)) = app.scan {
-        right.insert(0, Span::styled(format!(" {} scanning {done}/{total} ", SPINNER[app.tick % SPINNER.len()]), Style::new().fg(Color::Yellow)));
-    }
+    // Right side, left to right: search, running operations, scan progress, totals.
+    let mut right = Vec::new();
     if !app.search.is_empty() {
-        right.insert(0, Span::styled(format!(" /{} ", app.search), Style::new().fg(Color::Magenta)));
+        right.push(Span::styled(format!(" /{} ", app.search), BOLD));
     }
+    if !app.busy.is_empty() {
+        right.push(Span::styled(format!(" {spin} {} running ", app.busy.len()), BOLD));
+    }
+    match app.scan {
+        Some((_, 0)) => right.push(Span::styled(format!(" {spin} discovering "), BOLD)),
+        Some((done, total)) => right.push(Span::styled(format!(" {spin} scanning {} {done}/{total} ", bar(done, total, 10)), BOLD)),
+        None => {}
+    }
+    right.push(Span::styled(format!(" {} repos · {dirty} dirty · {ahead} ahead · {behind} behind ", app.repos.len()), DIM));
 
     let block = Block::bordered()
         .padding(Padding::horizontal(SIDE_PAD))
-        .border_style(Style::new().fg(Color::DarkGray))
-        .title(Span::styled(format!(" ◆ OXIDE v{} ", env!("CARGO_PKG_VERSION")), Style::new().fg(ACCENT).bold()))
+        .border_style(DIM)
+        .title(Line::from(vec![
+            Span::styled("─┤ ", DIM),
+            Span::styled("◆ OXIDE", BOLD),
+            Span::styled(format!(" v{}", env!("CARGO_PKG_VERSION")), DIM),
+            Span::styled(" ├", DIM),
+        ]))
         .title_top(Line::from(right).right_aligned());
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -113,51 +165,48 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
                 Filter::Owned => "Owned",
                 Filter::Cloned => "Cloned",
             };
-            format!("{name} ({})", app.count(flt))
+            format!(" {name} {} ", app.count(flt))
         })
         .collect();
-    let tabs = Tabs::new(titles)
-        .select(app.filter.index())
-        .highlight_style(Style::new().fg(Color::Black).bg(ACCENT).bold())
-        .divider("│");
+    let tabs = Tabs::new(titles).style(PLAIN).select(app.filter.index()).highlight_style(INVERSE).divider(Span::styled("┊", DIM));
     f.render_widget(tabs, inner);
 }
 
 fn repo_row(r: &Repo, busy: Option<&str>, tick: usize, name_w: usize) -> ListItem<'static> {
-    let color = health_color(r.health());
     let marker = match busy {
-        Some(_) => Span::styled(SPINNER[tick % SPINNER.len()], Style::new().fg(Color::Yellow)),
-        None => Span::styled("●", Style::new().fg(color)),
+        Some(_) => Span::styled(SPINNER[tick % SPINNER.len()], BOLD),
+        None => Span::styled(health_symbol(r.health()), if r.health() == Health::Clean { DIM } else { BOLD }),
     };
-    let (badge, badge_color) = match r.owner {
-        Owner::Owned => ("own  ", Color::Green),
-        Owner::Cloned => ("clone", Color::Blue),
+    // Cloned repositories are dimmed so owned ones stand out.
+    let (badge, badge_style) = match r.owner {
+        Owner::Owned => ("own  ", PLAIN),
+        Owner::Cloned => ("clone", DIM),
     };
     let mut spans = vec![
         marker,
         Span::raw(" "),
-        Span::styled(fit(&r.name, name_w), Style::new().bold()),
+        Span::styled(fit(&r.name, name_w), BOLD),
         Span::raw(" "),
-        Span::styled(badge, Style::new().fg(badge_color)),
+        Span::styled(badge, badge_style),
         Span::raw(" "),
-        Span::styled(fit(&r.branch, 14), Style::new().fg(Color::Magenta)),
+        Span::styled(fit(&r.branch, 14), PLAIN),
         Span::raw(" "),
     ];
     if r.ahead > 0 {
-        spans.push(Span::styled(format!("↑{} ", r.ahead), Style::new().fg(Color::Green)));
+        spans.push(Span::styled(format!("↑{} ", r.ahead), PLAIN));
     }
     if r.behind > 0 {
-        spans.push(Span::styled(format!("↓{} ", r.behind), Style::new().fg(Color::Red)));
+        spans.push(Span::styled(format!("↓{} ", r.behind), PLAIN));
     }
     if let Some(label) = busy {
-        spans.push(Span::styled(format!("{label}… "), Style::new().fg(Color::Yellow)));
+        spans.push(Span::styled(format!("{label}… "), BOLD));
     }
     if r.error.is_some() {
-        spans.push(Span::styled("error", Style::new().fg(Color::Red)));
+        spans.push(Span::styled("error", BOLD));
     }
-    for (n, sym, c) in [(r.conflicts(), "!", Color::Red), (r.staged(), "+", Color::Green), (r.unstaged(), "~", Color::Yellow), (r.untracked(), "?", Color::Blue)] {
+    for (n, sym) in [(r.conflicts(), "!"), (r.staged(), "+"), (r.unstaged(), "~"), (r.untracked(), "?")] {
         if n > 0 {
-            spans.push(Span::styled(format!("{sym}{n} "), Style::new().fg(c)));
+            spans.push(Span::styled(format!("{sym}{n} "), PLAIN));
         }
     }
     ListItem::new(Line::from(spans))
@@ -173,7 +222,7 @@ fn draw_repos(f: &mut Frame, app: &mut App, area: Rect) {
 
     if app.visible.is_empty() {
         let msg = if app.scan.is_some() { "Scanning for repositories…" } else { "No repositories match. Press R to rescan." };
-        f.render_widget(Paragraph::new(msg).dark_gray().block(block), area);
+        f.render_widget(Paragraph::new(msg).style(DIM.add_modifier(Modifier::ITALIC)).block(block), area);
         return;
     }
 
@@ -187,80 +236,90 @@ fn draw_repos(f: &mut Frame, app: &mut App, area: Rect) {
             repo_row(r, app.busy.get(&r.path).copied(), app.tick, name_w)
         })
         .collect();
-    let list = List::new(items).block(block).highlight_style(Style::new().bg(Color::Rgb(40, 44, 52)).add_modifier(Modifier::BOLD)).highlight_symbol("▶ ");
+    let selection = if app.focus == Focus::Repos { INVERSE } else { INVERSE_DIM };
+    let list = List::new(items).block(block).highlight_style(selection);
     f.render_stateful_widget(list, area, &mut app.repo_state);
 }
 
+/// `XY path`: the index letter is bold when staged, untracked files are dimmed.
 fn file_row(e: &FileEntry) -> ListItem<'static> {
-    let (x, y) = if e.untracked() { ('?', '?') } else { (e.x, e.y) };
-    let xc = if e.conflict() { Color::Red } else { Color::Green };
-    let yc = if e.conflict() { Color::Red } else if e.untracked() { Color::Blue } else { Color::Yellow };
+    if e.untracked() {
+        return ListItem::new(Line::from(Span::styled(format!("?? {}", e.path), DIM)));
+    }
+    let x_style = if e.staged() || e.conflict() { BOLD } else { PLAIN };
     ListItem::new(Line::from(vec![
-        Span::styled(x.to_string(), Style::new().fg(xc)),
-        Span::styled(y.to_string(), Style::new().fg(yc)),
-        Span::raw(format!(" {}", e.path)),
+        Span::styled(e.x.to_string(), x_style),
+        Span::styled(e.y.to_string(), PLAIN),
+        Span::styled(format!(" {}", e.path), PLAIN),
     ]))
+}
+
+/// A counter that is dimmed while it is zero, so only non-zero values stand out.
+fn count_span(n: usize, prefix: &str, suffix: &str) -> Span<'static> {
+    Span::styled(format!("{prefix}{n}{suffix}"), if n == 0 { DIM } else { BOLD })
+}
+
+/// `<hash> <subject> (<relative date>)` with the hash dimmed.
+fn commit_line(commit: &str, label: Span<'static>) -> Line<'static> {
+    match commit.split_once(' ') {
+        Some((hash, rest)) => Line::from(vec![label, Span::styled(format!("{hash} "), DIM), Span::styled(rest.to_string(), PLAIN)]),
+        None => Line::from(vec![label, Span::styled(commit.to_string(), DIM)]),
+    }
 }
 
 fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Files;
     let Some(r) = app.selected().cloned() else {
-        f.render_widget(Paragraph::new("Select a repository.").dark_gray().block(pane(" Details ".into(), false)), area);
+        f.render_widget(Paragraph::new("Select a repository.").style(DIM.add_modifier(Modifier::ITALIC)).block(pane(" Details ".into(), false)), area);
         return;
     };
 
-    let [info_area, files_area] = Layout::vertical([Constraint::Length(9), Constraint::Min(3)]).areas(area);
+    let [info_area, files_area] = Layout::vertical([Constraint::Length(9), Constraint::Min(3)]).spacing(GAP_Y).areas(area);
 
-    let label = |s: &'static str| Span::styled(format!("{s:<9}"), Style::new().fg(Color::DarkGray));
+    let label = |s: &'static str| Span::styled(format!("{s:<9}"), DIM);
     let mut lines = vec![
-        Line::from(vec![label("path"), Span::raw(r.path.display().to_string())]),
+        Line::from(vec![label("path"), Span::styled(r.path.display().to_string(), ITALIC)]),
         Line::from(vec![
             label("branch"),
-            Span::styled(r.branch.clone(), Style::new().fg(Color::Magenta)),
-            Span::raw(match &r.upstream {
-                Some(u) => format!("  → {u}"),
-                None => "  (no upstream)".to_string(),
-            }),
+            Span::styled(r.branch.clone(), BOLD),
+            Span::styled(
+                match &r.upstream {
+                    Some(u) => format!("  → {u}"),
+                    None => "  (no upstream)".to_string(),
+                },
+                PLAIN,
+            ),
         ]),
-        Line::from(vec![label("remote"), Span::raw(r.remote.clone().unwrap_or_else(|| "none (local only)".into()))]),
-        Line::from(vec![
-            label("owner"),
-            match r.owner {
-                Owner::Owned => Span::styled("owned", Style::new().fg(Color::Green)),
-                Owner::Cloned => Span::styled("cloned", Style::new().fg(Color::Blue)),
-            },
-        ]),
+        Line::from(vec![label("remote"), Span::styled(r.remote.clone().unwrap_or_else(|| "none (local only)".into()), ITALIC)]),
+        Line::from(vec![label("owner"), Span::styled(if r.owner == Owner::Owned { "owned" } else { "cloned" }, PLAIN)]),
         Line::from(vec![
             label("sync"),
-            Span::styled(format!("↑{} ahead", r.ahead), Style::new().fg(Color::Green)),
+            count_span(r.ahead as usize, "↑", " ahead"),
             Span::raw("  "),
-            Span::styled(format!("↓{} behind", r.behind), Style::new().fg(Color::Red)),
+            count_span(r.behind as usize, "↓", " behind"),
         ]),
         Line::from(vec![
             label("changes"),
-            Span::styled(format!("{} staged", r.staged()), Style::new().fg(Color::Green)),
-            Span::raw(" · "),
-            Span::styled(format!("{} modified", r.unstaged()), Style::new().fg(Color::Yellow)),
-            Span::raw(" · "),
-            Span::styled(format!("{} untracked", r.untracked()), Style::new().fg(Color::Blue)),
+            count_span(r.staged(), "", " staged"),
+            Span::styled(" · ", DIM),
+            count_span(r.unstaged(), "", " modified"),
+            Span::styled(" · ", DIM),
+            count_span(r.untracked(), "", " untracked"),
         ]),
-        Line::from(vec![label("commit"), Span::raw(r.last_commit.clone())]),
+        commit_line(&r.last_commit, label("commit")),
     ];
     if let Some(e) = &r.error {
-        lines.push(Line::from(Span::styled(format!("error: {}", e.lines().next().unwrap_or("")), Style::new().fg(Color::Red))));
+        lines.push(Line::from(Span::styled(format!("error: {}", e.lines().next().unwrap_or("")), BOLD)));
     }
     f.render_widget(Paragraph::new(lines).block(pane(format!(" {} ", r.name), false)), info_area);
 
     let block = pane(format!(" Changes ({}) ", r.files.len()), focused);
     if r.files.is_empty() {
-        f.render_widget(Paragraph::new("Working tree clean ✓").green().block(block), files_area);
+        f.render_widget(Paragraph::new("Working tree clean ✓").style(DIM.add_modifier(Modifier::ITALIC)).block(block), files_area);
         return;
     }
     let items: Vec<ListItem> = r.files.iter().map(file_row).collect();
-    let list = List::new(items)
-        .block(block)
-        .highlight_style(if focused { Style::new().bg(Color::Rgb(40, 44, 52)).add_modifier(Modifier::BOLD) } else { Style::new() })
-        .highlight_symbol(if focused { "▶ " } else { "  " });
+    let list = List::new(items).block(block).highlight_style(if focused { INVERSE } else { INVERSE_DIM });
     f.render_stateful_widget(list, files_area, &mut app.file_state);
 }
 
@@ -269,14 +328,23 @@ fn draw_log(f: &mut Frame, app: &App, area: Rect) {
     let start = app.log.len().saturating_sub(rows);
     let lines: Vec<Line> = app.log[start..]
         .iter()
-        .map(|l| {
-            let color = match l.level {
-                Level::Info => Color::Gray,
-                Level::Ok => Color::Green,
-                Level::Warn => Color::Yellow,
-                Level::Error => Color::Red,
+        .enumerate()
+        .map(|(i, l)| {
+            // Level is shown by a symbol and weight: dim info, plain ok, bold warnings and errors.
+            let (sym, style) = match l.level {
+                Level::Info => ("  ", DIM),
+                Level::Ok => ("✓ ", PLAIN),
+                Level::Warn => ("! ", BOLD),
+                Level::Error => ("✗ ", BOLD),
             };
-            Line::from(vec![Span::styled(format!("{} ", l.time), Style::new().fg(Color::DarkGray)), Span::styled(l.text.clone(), Style::new().fg(color))])
+            // Entries fade out as they age: only the newest three keep their full weight.
+            let age = app.log.len() - start - 1 - i;
+            let style = if age >= 3 { style.add_modifier(Modifier::DIM) } else { style };
+            Line::from(vec![
+                Span::styled(format!("{} ", l.time), DIM),
+                Span::styled(sym, style),
+                Span::styled(l.text.clone(), style),
+            ])
         })
         .collect();
     f.render_widget(Paragraph::new(lines).block(pane(" Log (UTC) ".into(), false)), area);
@@ -290,19 +358,32 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             InputKind::Search => "search".to_string(),
         };
         let line = Line::from(vec![
-            Span::styled(format!(" {prompt} ▸ "), Style::new().fg(ACCENT).bold()),
-            Span::raw(app.input.clone()),
-            Span::styled("█", Style::new().fg(ACCENT)),
+            Span::styled(format!(" {prompt} ▸ "), BOLD),
+            Span::styled(app.input.clone(), PLAIN),
+            Span::styled("█", PLAIN),
         ]);
         f.render_widget(Paragraph::new(line), area);
         return;
     }
 
-    let hints = [("↑↓", "move"), ("Tab", "pane"), ("f", "filter"), ("/", "search"), ("Space", "stage"), ("c", "commit"), ("p", "pull"), ("P", "push"), ("F", "fetch"), ("m", "merge"), ("R", "rescan"), ("?", "help"), ("q", "quit")];
+    let hints = [
+        ("↑↓", "move"),
+        ("Tab", "pane"),
+        ("f", "filter"),
+        ("/", "search"),
+        ("Space", "stage"),
+        ("c", "commit"),
+        ("p", "pull"),
+        ("P", "push"),
+        ("F", "fetch"),
+        ("m", "merge"),
+        ("?", "help"),
+        ("q", "quit"),
+    ];
     let mut spans = Vec::new();
     for (key, what) in hints {
-        spans.push(Span::styled(format!(" {key}"), Style::new().fg(ACCENT).bold()));
-        spans.push(Span::styled(format!(" {what} "), Style::new().fg(Color::DarkGray)));
+        spans.push(Span::styled(format!(" {key} "), KEYCAP));
+        spans.push(Span::styled(format!(" {what}  "), DIM));
     }
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
@@ -327,14 +408,14 @@ fn draw_help(f: &mut Frame) {
         ("?", "this help"),
         ("q, Ctrl+C", "quit"),
         ("", ""),
-        ("●", "green clean · yellow dirty · red conflict/error"),
+        ("○ ● ✖", "clean · dirty · conflict or error"),
         ("↑n ↓n", "commits ahead / behind upstream"),
         ("+ ~ ? !", "staged · modified · untracked · conflicts"),
         ("", "Any key closes this window."),
     ];
     let lines: Vec<Line> = rows
         .iter()
-        .map(|(k, d)| Line::from(vec![Span::styled(format!("{k:<16}"), Style::new().fg(ACCENT).bold()), Span::raw(*d)]))
+        .map(|(k, d)| Line::from(vec![Span::styled(format!("{k:<16}"), BOLD), Span::styled(*d, PLAIN)]))
         .collect();
 
     let area = f.area();
@@ -343,5 +424,10 @@ fn draw_help(f: &mut Frame) {
     let [_, mid, _] = Layout::vertical([Constraint::Fill(1), Constraint::Length(h), Constraint::Fill(1)]).areas(area);
     let [_, popup, _] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(w), Constraint::Fill(1)]).areas(mid);
     f.render_widget(Clear, popup);
-    f.render_widget(Paragraph::new(lines).block(pane(" Oxide keys ".into(), true)), popup);
+    let block = Block::bordered()
+        .border_type(BorderType::Double)
+        .padding(Padding::horizontal(SIDE_PAD))
+        .border_style(BOLD)
+        .title(Line::from(vec![Span::styled("═╡ ", BOLD), Span::styled("◆ OXIDE keys", BOLD), Span::styled(" ╞", BOLD)]));
+    f.render_widget(Paragraph::new(lines).block(block), popup);
 }

@@ -1,10 +1,13 @@
 //! Banner art: `banner.sh` is embedded at compile time and its colored `echo -e "..."` lines
-//! are converted into styled Ratatui lines. The script is never executed.
+//! are converted into monochrome Ratatui lines. The script is never executed.
+//!
+//! The art's colors are flattened to its brightness: no color is set, so the text takes the
+//! interface's single ink color, and light/dark shades become bold/dim. Backgrounds are dropped.
 
 use std::sync::OnceLock;
 
 use ratatui::{
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
 };
 
@@ -57,43 +60,17 @@ fn ansi_line(s: &str) -> Line<'static> {
     Line::from(spans)
 }
 
-/// Applies the `;`-separated SGR codes (reset, bold, 16 foreground and 16 background colors).
+/// Applies the `;`-separated SGR codes, keeping only reset, bold and the brightness of the foreground.
 fn apply_sgr(mut style: Style, params: &str) -> Style {
     for code in params.split(';') {
         let n: u8 = code.parse().unwrap_or(0); // an empty code means reset
         style = match n {
-            0 => Style::new(),
-            1 => style.add_modifier(Modifier::BOLD),
-            30..=37 => style.fg(color(n - 30, false)),
-            90..=97 => style.fg(color(n - 90, true)),
-            39 => style.fg(Color::Reset),
-            40..=47 => style.bg(color(n - 40, false)),
-            100..=107 => style.bg(color(n - 100, true)),
-            49 => style.bg(Color::Reset),
-            _ => style,
+            0 | 39 => Style::new(),
+            1 | 91..=97 => Style::new().add_modifier(Modifier::BOLD), // bold and bright colors
+            30 | 34 | 90 => Style::new().add_modifier(Modifier::DIM), // dark colors: black, blue, bright black
+            31..=33 | 35..=37 => Style::new(),
+            _ => style, // backgrounds and unsupported codes
         };
     }
     style
-}
-
-/// ANSI palette index (0-7), normal or bright, as a terminal-themed color.
-fn color(i: u8, bright: bool) -> Color {
-    match (i, bright) {
-        (0, false) => Color::Black,
-        (1, false) => Color::Red,
-        (2, false) => Color::Green,
-        (3, false) => Color::Yellow,
-        (4, false) => Color::Blue,
-        (5, false) => Color::Magenta,
-        (6, false) => Color::Cyan,
-        (_, false) => Color::Gray,
-        (0, true) => Color::DarkGray,
-        (1, true) => Color::LightRed,
-        (2, true) => Color::LightGreen,
-        (3, true) => Color::LightYellow,
-        (4, true) => Color::LightBlue,
-        (5, true) => Color::LightMagenta,
-        (6, true) => Color::LightCyan,
-        (_, true) => Color::White,
-    }
 }

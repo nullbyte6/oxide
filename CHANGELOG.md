@@ -12,10 +12,9 @@ All notable changes to Oxide are recorded here, newest version first.
 - Add live search, fetch-all and `--list` plain-text output.
 - Add config file (`root`, `owner`, `depth`) and persistent log file with rotation.
 - Add LICENSE (MIT) and README with usage, keys and configuration.
-- Add ASCII banner on top of the dashboard, loaded from `src/banner.sh`.
-- Add banner renderer that converts the script's ANSI colors to Ratatui styles and hides the banner on small terminals.
+- Add ASCII banner on top of the dashboard, rendered from `src/banner.sh`: its ANSI colors are converted to Ratatui styles and it is hidden on small terminals.
 
 ### Changed
-- Update panels with one column of inner side padding so all four sides look equally thick.
-- Update default scan to cover every mounted drive (internal and external) instead of only the home directory.
-- Update default scan depth from 5 to 6 levels.
+- Update default scan to cover every mounted drive (internal and external) instead of only the home directory, with a default depth of 6 levels.
+- Update panel spacing: one column of inner side padding, one empty column between side-by-side panels and no empty row between stacked ones, which look equal.
+- Update design to a monochrome look, banner included: a single ink color on the terminal background, with bold/dim/italic/inverse text and symbols instead of hues, thick focus borders, title notches, a scan progress bar and running-operations indicator, dimmed zero counters, fading log entries, footer key caps, a double-border help window and an inverse-only selected row (no marker).

@@ -79,8 +79,27 @@ oxide [OPTIONS] [PATH...]
 | `?` | Help |
 | `q`, `Ctrl+C` | Quit |
 
-Status colours: **green** clean, **yellow** dirty, **red** conflicts or error.
+Status symbols: `○` clean, `●` dirty, `✖` conflicts or error.
 Row symbols: `↑n` ahead, `↓n` behind, `+` staged, `~` modified, `?` untracked, `!` conflicts.
+
+## Design
+
+Oxide is monochrome: a single ink color on your terminal's own background. Hierarchy comes
+from bold, dim, italic and inverse text rather than hues:
+
+- **Spacing**: side-by-side panels are 1 empty column apart and stacked panels touch (no empty
+  row), which look equal because terminal cells are about twice as tall as wide. The focused
+  panel gets a thick border.
+- **Selection** is an inverse row (faded in the pane that has no focus), without any marker.
+- **Activity**: a spinner and progress bar (`▰▰▰▱▱▱▱▱▱▱`) in the header while scanning, and the
+  number of running git operations; a spinner replaces the status symbol of busy rows.
+- **Dimming**: zero counters, hashes, labels and cloned repositories are dimmed, and log
+  entries fade as they age (the newest three keep full weight).
+- **Key caps** in the footer, `─┤ title ├─` notches on panel titles, a double-border help window.
+
+To recolor everything, change `INK` in [`src/ui.rs`](src/ui.rs) (the default is the terminal's
+own foreground). `GAP_X`, `GAP_Y` and `SIDE_PAD` tune the gaps and the inner side padding of panels. The banner follows the
+same rule.
 
 ## Owned vs cloned
 
@@ -129,8 +148,8 @@ file when it is built and converts its colors itself; the script is never run. P
 it in any terminal with `bash src/banner.sh`.
 
 - Every art line must be `echo -e "..."`; other lines in the file are ignored.
-- Supported color codes: reset, bold, and the 16 standard foreground/background colors
-  (`\033[0;97m`, `\033[0;90;47m`, ...). They follow your terminal theme.
+- The art's colors are flattened to the single ink color: bold and bright colors (`97`, `91`-`96`)
+  render bold, dark ones (`30`, `34`, `90`) dim, the rest normal. Background colors are ignored.
 - Edit the script and rebuild to change the banner.
 - The banner is hidden when the terminal is narrower than the art or has fewer than
   24 rows to spare, so the dashboard always keeps its space.
@@ -159,7 +178,7 @@ run in batch mode unless you set `core.sshCommand`, `GIT_SSH_COMMAND` or `GIT_SS
 | `src/worker.rs` | Background scan and operation threads |
 | `src/config.rs` | Config file, roots and owner names |
 | `src/logger.rs` | Persistent log file |
-| `src/banner.rs` | Turns `src/banner.sh` colored art into Ratatui lines |
+| `src/banner.rs` | Turns `src/banner.sh` into monochrome Ratatui lines |
 | `src/banner.sh` | The ASCII banner art shown on top of the dashboard |
 
 ## Versioning
