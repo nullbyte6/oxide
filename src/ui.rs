@@ -430,6 +430,14 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             InputKind::Init => "git init in folder (created if missing)".to_string(),
             InputKind::GhSearch => "search GitHub repositories (empty = yours)".to_string(),
             InputKind::CloneTo => "clone into".to_string(),
+            InputKind::DeleteRepo => app.selected().map_or_else(String::new, |r| {
+                {
+                // `~` instead of the home directory keeps the part that matters on screen.
+                let home = crate::config::home();
+                let path = r.path.strip_prefix(&home).map_or_else(|_| r.path.display().to_string(), |p| format!("~/{}", p.display()));
+                format!("DELETE {path} from disk ({}). Type \"{}\"", r.risk_summary(), r.name)
+            }
+            }),
         };
         let line = Line::from(vec![
             Span::styled(format!(" {prompt} ▸ "), hue(BOLD, ACCENT)),
@@ -907,9 +915,9 @@ fn draw_help(f: &mut Frame) {
         ("p / P", "pull (fast-forward only) / push (new branches with -u)"),
         ("F / A", "fetch selected repository / every one in view"),
         ("L / U", "pull every behind / push every ahead repository in view"),
-        ("m", "merge a branch (empty = upstream)"),
-        ("z / Z", "stash all changes / pop the latest stash"),
+        ("m z Z", "merge a branch (empty = upstream) / stash all changes / pop the stash"),
         ("d v b I", "diff of the file / commit log / branches / git init in any folder"),
+        ("D", "DELETE the repository from disk (asks you to type its name)"),
         ("i y B S", "GitHub: issues / pull requests / repo in browser / find & clone"),
         ("e / t / o", "yazi on the file or repository / shell / file manager"),
         ("* / x / H", "pin / ignore the repository / show ignored ones"),

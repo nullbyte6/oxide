@@ -72,6 +72,26 @@ impl Repo {
         self.files.iter().filter(|f| f.conflict()).count()
     }
 
+    /// What deleting this repository would destroy that exists nowhere else, for the delete prompt.
+    pub fn risk_summary(&self) -> String {
+        let mut parts = Vec::new();
+        if !self.files.is_empty() {
+            parts.push(format!("{} uncommitted file(s)", self.files.len()));
+        }
+        if self.ahead > 0 {
+            parts.push(format!("{} unpushed commit(s)", self.ahead));
+        }
+        if self.stashes > 0 {
+            parts.push(format!("{} stash(es)", self.stashes));
+        }
+        if self.remote.is_none() {
+            parts.push("NO REMOTE: this is the only copy".to_string());
+        } else if self.upstream.is_none() && !self.branch.is_empty() {
+            parts.push("current branch has no upstream".to_string());
+        }
+        if parts.is_empty() { "clean and pushed".to_string() } else { parts.join(", ") }
+    }
+
     /// Sort weight for "most changed first": conflicts, then errors, then the number of changed files.
     pub fn activity(&self) -> usize {
         let rank = match self.health() {

@@ -71,6 +71,8 @@ pub enum Op {
     CheckoutPr(u64),
     /// Clone a GitHub repository (`owner/repo`) into the operation's folder.
     Clone(String),
+    /// Delete the repository's folder from disk.
+    Delete,
 }
 
 impl Op {
@@ -93,6 +95,7 @@ impl Op {
             Op::DeleteBranch(..) => "delete branch",
             Op::CheckoutPr(_) => "pr checkout",
             Op::Clone(_) => "clone",
+            Op::Delete => "delete",
         }
     }
 }
@@ -399,8 +402,29 @@ pub fn perform(repo: &Path, op: &Op) -> Result<String, String> {
         Op::Clone(slug) if slug.starts_with('-') => Err(format!("invalid repository '{slug}'")),
         Op::Clone(_) if repo.read_dir().is_ok_and(|mut d| d.next().is_some()) => Err(format!("{} already exists and is not empty", repo.display())),
         Op::Clone(slug) => crate::github::clone(slug, repo),
+        Op::Delete => delete_repo(repo),
         Op::DeleteBranch(name, force) => run_all(repo, &["branch", if *force { "-D" } else { "-d" }, "--", name]),
     }
+}
+
+/// Removes a repository's folder from disk. Besides the prompt in the UI, this refuses anything that is
+/// not a plain, standalone repository folder: symlinks (which could lead anywhere), worktrees and
+/// submodules (whose `.git` is a file), and any folder that is, or contains, the home directory.
+fn delete_repo(path: &Path) -> Result<String, String> {
+    let meta = std::fs::symlink_metadata(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    if meta.file_type().is_symlink() {
+        return Err(format!("{} is a symlink; delete it by hand", path.display()));
+    }
+    if !path.join(".git").is_dir() {
+        return Err(format!("{} is not a standalone repository (worktree or submodule); delete it by hand", path.display()));
+    }
+    let real = path.canonicalize().map_err(|e| format!("cannot resolve {}: {e}", path.display()))?;
+    let home = crate::config::home().canonicalize().unwrap_or_default();
+    if real.parent().is_none() || home.starts_with(&real) {
+        return Err(format!("refusing to delete {}: it is, or contains, your home directory", real.display()));
+    }
+    std::fs::remove_dir_all(&real).map_err(|e| format!("cannot delete {}: {e}", real.display()))?;
+    Ok(format!("deleted {}", real.display()))
 }
 
 /// Pushes the current branch, publishing it with `-u` when it has no upstream yet.

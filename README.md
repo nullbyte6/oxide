@@ -73,6 +73,7 @@ oxide [OPTIONS] [PATH...]
 | `Tab`, `←` `→` | Switch between the repository list and the changes list |
 | `f`, `1` `2` `3` `4` | Filter: cycle, or All / Owned / Cloned / Attention |
 | `s` | Sort: name / recent / changes / behind (pinned repositories always come first) |
+| `D` | **Delete the repository's folder from disk** (see below) |
 | `*` / `x` | Pin / ignore the selected repository |
 | `H` | Show ignored repositories (marked `⊘`) |
 | `C` | Toggle colors |
@@ -165,6 +166,17 @@ action stays visible.
 | `d` / `D` | Delete a local branch (`d` only if it is merged, `D` even if it is not); asks `y` to confirm |
 | `m` | Merge the branch into the current one (asks `y` to confirm) |
 | `Esc`, `q`, `b` | Close |
+
+### Deleting a repository
+
+`D` removes the selected repository's whole folder from disk, not just its entry in the list (`x` ignores a
+repository without touching it). Nothing happens until you type the repository's exact name at the prompt,
+which spells out what would be lost: uncommitted files, unpushed commits, stashes, and a warning in capitals
+when there is no remote and the folder is the only copy. Any other input, or `Esc`, cancels.
+
+On top of the prompt, Oxide refuses to delete a symlink, a worktree or submodule (whose `.git` is a file),
+anything that is not a standalone repository folder, and any folder that is or contains your home directory.
+Deleting is final: it does not use a trash.
 
 ### git init
 

@@ -40,6 +40,7 @@ pub const ENTRIES: &[Entry] = &[
     e("Open in yazi", "e", 'e'),
     e("Open a shell here", "t", 't'),
     e("Open in the file manager", "o", 'o'),
+    e("Delete the repository from disk", "D", 'D'),
     e("Pin or unpin the repository", "*", '*'),
     e("Ignore or unignore the repository", "x", 'x'),
     e("Show or hide ignored repositories", "H", 'H'),

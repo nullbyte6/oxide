@@ -277,6 +277,8 @@ pub enum InputKind {
     GhSearch,
     /// Folder to clone the chosen GitHub repository into.
     CloneTo,
+    /// The repository's name, typed to confirm deleting it from disk.
+    DeleteRepo,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -529,6 +531,10 @@ impl App {
                         }
                     }
                 }
+                Msg::Removed(path) => {
+                    self.repos.retain(|r| r.path != path);
+                    self.rebuild();
+                }
                 Msg::Repos { id, result } => {
                     if let Some(v) = self.finder.as_mut().filter(|v| v.id == id) {
                         match result {
@@ -697,6 +703,11 @@ impl App {
             KeyCode::Char('y') => self.open_gh(Kind::Pulls),
             KeyCode::Char('B') => self.browse_repo(),
             KeyCode::Char('S') => self.open_input(InputKind::GhSearch),
+            KeyCode::Char('D') => {
+                if self.selected().is_some() {
+                    self.open_input(InputKind::DeleteRepo);
+                }
+            }
             KeyCode::Char('s') => self.cycle_sort(),
             KeyCode::Char('C') => {
                 self.color = !self.color;
@@ -1168,6 +1179,17 @@ impl App {
         self.run_ops(vec![(path, Op::Clone(slug))]);
     }
 
+    /// Deletes the selected repository's folder, but only when `typed` is exactly its name.
+    fn delete_selected(&mut self, typed: &str) {
+        let Some((path, name)) = self.selected().map(|r| (r.path.clone(), r.name.clone())) else { return };
+        if typed != name {
+            self.log(Level::Info, format!("{name}: not deleted (the name typed did not match)"));
+            return;
+        }
+        self.log(Level::Warn, format!("{name}: deleting {} from disk", path.display()));
+        self.run_ops(vec![(path, Op::Delete)]);
+    }
+
     fn init_repo(&mut self, text: &str) {
         if text.is_empty() {
             self.log(Level::Warn, "no folder given, git init cancelled");
@@ -1357,6 +1379,7 @@ impl App {
                 self.load_finder();
             }
             InputKind::CloneTo => self.clone_repo(&text),
+            InputKind::DeleteRepo => self.delete_selected(&text),
             InputKind::Branch if text.is_empty() => self.log(Level::Warn, "empty branch name, nothing created"),
             InputKind::Branch => {
                 if let Some(repo) = self.branches.as_ref().map(|v| v.repo.clone()) {
