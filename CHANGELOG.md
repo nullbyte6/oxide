@@ -26,6 +26,7 @@ All notable changes to Oxide are recorded here, newest version first.
 - Add `git init` (`I`) for any folder, creating it when missing; the new repository is added to the list and selected.
 - Add command palette (`:` or `Ctrl+P`): a fuzzy launcher for every dashboard action that runs the action's own key, so both always behave the same.
 - Add `h` to hide and show the key bar at the bottom, freeing its row for the panels; `hints = off` in the config starts it hidden. Text prompts and confirmations still use the row.
+- Add GitHub integration through the `gh` CLI: `i` and `y` list a repository's issues and pull requests (state filter, comment counts, labels, branches, draft and review marks), `o` opens an item and `B` the repository in the browser.
 - Add bulk pull (`L`) and bulk push (`U`, asks for confirmation) for the repositories in view.
 
 ### Fixed

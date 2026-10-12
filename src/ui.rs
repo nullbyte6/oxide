@@ -20,6 +20,7 @@ use crate::{
     banner,
     diff::{Row, Sign},
     git::{Branch, DiffKind, FileEntry},
+    github::Kind,
     logger::{self, Level},
     palette,
     repo::{Health, Owner, Repo},
@@ -109,6 +110,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Diff => draw_diff(f, app),
         Mode::History => draw_history(f, app),
         Mode::Branches => draw_branches(f, app),
+        Mode::GitHub => draw_github(f, app),
         _ => {}
     }
     if app.mode == Mode::Palette {
@@ -456,6 +458,11 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
         return;
     }
+    if app.mode == Mode::GitHub {
+        let hints = [("↑↓", "move"), ("Tab", "issues/PRs"), ("s", "state"), ("o", "browser"), ("B", "repo in browser"), ("r", "reload"), ("Esc", "close")];
+        f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
+        return;
+    }
     if app.mode == Mode::Branches {
         let hints = [("↑↓", "move"), ("Enter", "switch"), ("n", "new"), ("d", "delete"), ("D", "force delete"), ("m", "merge"), ("Esc", "close")];
         f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
@@ -657,6 +664,53 @@ fn branch_tags(b: &Branch) -> Vec<Span<'static>> {
     tags
 }
 
+/// Issues or pull requests of a repository on GitHub, as a full-screen list.
+fn draw_github(f: &mut Frame, app: &mut App) {
+    let [area, _] = Layout::vertical([Constraint::Min(0), Constraint::Length(footer_height(app))]).areas(f.area());
+    let Some(v) = app.gh.as_mut() else { return };
+    f.render_widget(Clear, area);
+    let count = v.items.as_ref().map_or(String::new(), |i| format!(" ({})", i.len()));
+    let block = pane(format!(" {} · {} · {}{count} ", v.kind.label(), v.name, v.state.name()), true);
+    let note = |msg: String, f: &mut Frame, block: Block<'static>| {
+        f.render_widget(Paragraph::new(msg).style(DIM.add_modifier(Modifier::ITALIC)).block(block), area);
+    };
+    if let Some(e) = &v.error {
+        return note(format!("gh failed: {}", e.lines().next().unwrap_or("")), f, block);
+    }
+    let Some(items) = &v.items else { return note("Loading from GitHub…".to_string(), f, block) };
+    if items.is_empty() {
+        return note(format!("No {} {}.", v.state.name(), v.kind.label().to_lowercase()), f, block);
+    }
+    let pulls = v.kind == Kind::Pulls;
+    // Fixed columns: number, branch or labels, author, age; the title takes what is left.
+    let side_w = if pulls { 24 } else { 22 };
+    let title_w = (area.width as usize).saturating_sub(4 + 8 + 5 + side_w + 15 + 5).max(12);
+    let rows: Vec<ListItem> = items
+        .iter()
+        .map(|i| {
+            let (mark, mark_style) = match (i.draft, i.review.as_str()) {
+                (true, _) => ("◌ ", DIM),
+                (_, "APPROVED") => ("✓ ", hue(BOLD, GOOD)),
+                (_, "CHANGES_REQUESTED") => ("± ", hue(BOLD, BAD)),
+                _ => ("  ", PLAIN),
+            };
+            let side = if pulls { i.branch.as_str() } else { i.labels.as_str() };
+            let mut spans = vec![Span::styled(format!("#{:<7}", i.number), hue(DIM, WARN))];
+            if pulls {
+                spans.push(Span::styled(mark, mark_style));
+            }
+            spans.push(Span::styled(fit(&i.title, title_w), PLAIN));
+            let replies = if i.comments > 0 { format!("✉{:<3}", i.comments) } else { " ".repeat(4) };
+            spans.push(Span::styled(replies, DIM));
+            spans.push(Span::styled(fit(side, side_w), hue(DIM, ACCENT)));
+            spans.push(Span::styled(fit(&i.author, 14), hue(PLAIN, INFO)));
+            spans.push(Span::styled(format!("{:>4}", i.age), DIM));
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+    f.render_stateful_widget(List::new(rows).block(block).highlight_style(INVERSE), area, &mut v.list);
+}
+
 /// The branch list as a popup, with the newest log message below it so the result of an action is visible.
 fn draw_branches(f: &mut Frame, app: &mut App) {
     let last = app.log.last().map(|l| l.text.clone()).unwrap_or_default();
@@ -756,8 +810,8 @@ fn draw_help(f: &mut Frame) {
         ("L / U", "pull every behind / push every ahead repository in view"),
         ("m", "merge a branch (empty = upstream)"),
         ("z / Z", "stash all changes / pop the latest stash"),
-        ("d / v / b", "diff of the highlighted file / commit log / branches"),
-        ("I", "git init in any folder (created if missing)"),
+        ("d v b I", "diff of the file / commit log / branches / git init in any folder"),
+        ("i y B", "GitHub: issues / pull requests / open the repository in the browser"),
         ("e / t / o", "yazi on the file or repository / shell / file manager"),
         ("* / x / H", "pin / ignore the repository / show ignored ones"),
         ("r / R", "reload selected repository / rescan all roots"),

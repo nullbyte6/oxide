@@ -25,6 +25,7 @@ screen, and lets you stage, commit, push, pull, fetch and merge without leaving 
 - **Diff viewer with syntax highlighting**: read the staged, unstaged or untracked diff of any changed file with line numbers and per-language colors, without leaving Oxide.
 - **Commit log and branches**: browse a repository's history and open any commit's diff; list, switch, create, merge and delete branches, with merged and stale ones flagged.
 - **`git init` anywhere**: initialise a repository in any folder, existing or new, and see it in the list right away.
+- **GitHub** (needs the [`gh`](https://cli.github.com) CLI, logged in): browse a repository's issues and pull requests, and open them or the repository in your browser.
 - **Jump out**: open the selected file or repository in yazi, a shell or the file manager.
 - **Non-blocking**: scans and git commands run on background threads; the UI never freezes.
 - **Search**: filter the list live by name, branch or path.
@@ -90,6 +91,8 @@ oxide [OPTIONS] [PATH...]
 | `v` | Commit log of the selected repository (see below) |
 | `b` | Branches of the selected repository (see below) |
 | `I` | `git init` in a folder: the prompt starts with the current directory, append a name for a new folder |
+| `i` / `y` | GitHub issues / pull requests of the selected repository (see below) |
+| `B` | Open the selected repository's GitHub page in the browser |
 | `e` | Open [yazi](https://yazi-rs.github.io) in the repository, with the highlighted file revealed when the changes list is focused. Open files from yazi with your usual opener (e.g. nvim). Without yazi installed it falls back to `$VISUAL` / `$EDITOR` |
 | `t` | Open `$SHELL` in the repository; exit it to return |
 | `o` | Open the repository folder in the file manager (`xdg-open`) |
@@ -99,6 +102,26 @@ oxide [OPTIONS] [PATH...]
 | `h` | Hide / show the key bar at the bottom (the row goes back to the panels; prompts still use it) |
 | `?` | Help |
 | `q`, `Ctrl+C` | Quit |
+
+### GitHub
+
+Oxide talks to GitHub through the [`gh`](https://cli.github.com) CLI, so it never handles a token: log in
+once with `gh auth login`. A repository needs a `github.com` remote (ssh, https or git URL); others
+report "no github.com remote" in the log.
+
+`i` lists the repository's issues and `y` its pull requests (the newest 100), full screen. Issue rows
+show the number, title, comment count, labels, author and age of the last update; pull request rows show
+the source branch instead of labels and mark drafts `◌`, approved `✓` and changes requested `±`.
+
+| Key | Action |
+| --- | --- |
+| `↑` `↓` / `j` `k`, `g` / `G`, `Space` / `b` | Move |
+| `Tab` | Switch between issues and pull requests |
+| `s` | State filter: open, closed, (merged for pull requests), all |
+| `o` | Open the highlighted item in the browser |
+| `B` | Open the repository in the browser |
+| `r` | Reload |
+| `Esc`, `q` | Close |
 
 ### Commit log
 
@@ -263,6 +286,7 @@ run in batch mode unless you set `core.sshCommand`, `GIT_SSH_COMMAND` or `GIT_SS
 | `src/main.rs` | CLI arguments, terminal setup, event loop |
 | `src/app.rs` | Application state and key handling |
 | `src/ui.rs` | Ratatui rendering |
+| `src/github.rs` | GitHub through the `gh` CLI: remote parsing, issue and pull request lists |
 | `src/git.rs` | `git` CLI wrapper: status parsing, operations and diffs |
 | `src/diff.rs` | Parses `git diff` output into rows for the diff viewer |
 | `src/syntax.rs` | Dependency-free syntax highlighter used by the diff viewer |

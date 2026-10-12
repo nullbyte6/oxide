@@ -18,6 +18,7 @@ use crate::{
     config::{self, Config},
     diff::{self, Diff},
     git::{Branch, Commit, DiffKind, Op},
+    github::{self, Item, Kind, State},
     logger::{self, Level, Logger},
     marks::{Mark, Marks},
     palette,
@@ -196,6 +197,25 @@ impl BranchView {
     }
 }
 
+/// The issues or pull requests of one repository on GitHub.
+pub struct GhView {
+    pub name: String,
+    pub slug: String,
+    pub kind: Kind,
+    pub state: State,
+    /// None while the list is loading.
+    pub items: Option<Vec<Item>>,
+    pub error: Option<String>,
+    pub list: ListState,
+    id: u64,
+}
+
+impl GhView {
+    fn selected(&self) -> Option<&Item> {
+        self.items.as_ref()?.get(self.list.selected()?)
+    }
+}
+
 /// A destructive or bulk operation waiting for a yes.
 pub struct Confirm {
     pub prompt: String,
@@ -237,6 +257,8 @@ pub enum Mode {
     History,
     /// The branch list (`App::branches`) is open.
     Branches,
+    /// The GitHub issue or pull request list (`App::gh`) is open.
+    GitHub,
     Help,
 }
 
@@ -280,6 +302,7 @@ pub struct App {
     pub diff: Option<DiffView>,
     pub history: Option<HistoryView>,
     pub branches: Option<BranchView>,
+    pub gh: Option<GhView>,
     /// Mode to return to when the input line closes (the dashboard, or the branch list).
     input_back: Mode,
     /// A repository just created with `git init`, selected as soon as it is loaded.
@@ -333,6 +356,7 @@ impl App {
             diff: None,
             history: None,
             branches: None,
+            gh: None,
             input_back: Mode::Normal,
             pending_select: None,
             diff_id: 0,
@@ -444,6 +468,20 @@ impl App {
                         }
                     }
                 }
+                Msg::GitHub { id, result } => {
+                    if let Some(v) = self.gh.as_mut().filter(|v| v.id == id) {
+                        match result {
+                            Ok(items) => {
+                                let keep = v.selected().map(|i| i.number);
+                                let at = items.iter().position(|i| Some(i.number) == keep);
+                                v.list.select(at.or(if items.is_empty() { None } else { Some(0) }));
+                                v.items = Some(items);
+                                v.error = None;
+                            }
+                            Err(e) => v.error = Some(e),
+                        }
+                    }
+                }
                 Msg::Branches { id, result } => {
                     if let Some(v) = self.branches.as_mut().filter(|v| v.id == id) {
                         match result {
@@ -548,6 +586,7 @@ impl App {
             Mode::Diff => self.on_diff_key(key),
             Mode::History => self.on_history_key(key),
             Mode::Branches => self.on_branch_key(key),
+            Mode::GitHub => self.on_gh_key(key),
             Mode::Normal => self.on_normal_key(key),
         }
     }
@@ -585,6 +624,9 @@ impl App {
             KeyCode::Char('v') => self.open_history(),
             KeyCode::Char('b') => self.open_branches(),
             KeyCode::Char('I') => self.open_init(),
+            KeyCode::Char('i') => self.open_gh(Kind::Issues),
+            KeyCode::Char('y') => self.open_gh(Kind::Pulls),
+            KeyCode::Char('B') => self.browse_repo(),
             KeyCode::Char('s') => self.cycle_sort(),
             KeyCode::Char('C') => {
                 self.color = !self.color;
@@ -782,6 +824,106 @@ impl App {
     fn ask(&mut self, prompt: String, jobs: Vec<(PathBuf, Op)>) {
         self.confirm = Some(Confirm { prompt, jobs, back: self.mode });
         self.mode = Mode::Confirm;
+    }
+
+    // ---- GitHub ----
+
+    /// The selected repository's name and GitHub slug; logs a warning when it is not on GitHub.
+    fn github_target(&mut self) -> Option<(PathBuf, String, String)> {
+        let r = self.selected()?;
+        let found = r.slug.clone().map(|s| (r.path.clone(), r.name.clone(), s));
+        if found.is_none() {
+            let msg = format!("{}: no github.com remote", r.name);
+            self.log(Level::Warn, msg);
+        }
+        found
+    }
+
+    fn open_gh(&mut self, kind: Kind) {
+        let Some((_, name, slug)) = self.github_target() else { return };
+        self.gh = Some(GhView { name, slug, kind, state: State::Open, items: None, error: None, list: ListState::default(), id: 0 });
+        self.mode = Mode::GitHub;
+        self.load_gh();
+    }
+
+    fn load_gh(&mut self) {
+        self.diff_id += 1;
+        let Some(v) = self.gh.as_mut() else { return };
+        v.id = self.diff_id;
+        v.items = None;
+        v.error = None;
+        let (id, slug, kind, state) = (v.id, v.slug.clone(), v.kind, v.state);
+        worker::spawn_msg(self.tx.clone(), move || Msg::GitHub { id, result: github::list(&slug, kind, state) });
+    }
+
+    fn on_gh_key(&mut self, key: KeyEvent) {
+        let Some(v) = self.gh.as_mut() else {
+            self.mode = Mode::Normal;
+            return;
+        };
+        let len = v.items.as_ref().map_or(0, Vec::len);
+        let delta = match key.code {
+            KeyCode::Esc | KeyCode::Char('q' | 'i' | 'y') => {
+                self.gh = None;
+                self.mode = Mode::Normal;
+                return;
+            }
+            KeyCode::Tab | KeyCode::BackTab => {
+                v.kind = v.kind.other();
+                v.state = State::Open;
+                self.load_gh();
+                return;
+            }
+            KeyCode::Char('s') => {
+                v.state = v.state.next(v.kind);
+                self.load_gh();
+                return;
+            }
+            KeyCode::Char('r') => {
+                self.load_gh();
+                return;
+            }
+            KeyCode::Char('o') => {
+                let args = v.selected().map(|i| github::browse_args(&v.slug, v.kind, Some(i.number)));
+                if let Some(args) = args {
+                    self.spawn_detached("gh", &args, "opened in the browser");
+                }
+                return;
+            }
+            KeyCode::Char('B') => {
+                let args = github::browse_args(&v.slug, v.kind, None);
+                self.spawn_detached("gh", &args, "repository opened in the browser");
+                return;
+            }
+            KeyCode::Down | KeyCode::Char('j') => 1,
+            KeyCode::Up | KeyCode::Char('k') => -1,
+            KeyCode::PageDown | KeyCode::Char(' ') => 15,
+            KeyCode::PageUp | KeyCode::Char('b') => -15,
+            KeyCode::Home | KeyCode::Char('g') => -(1 << 30),
+            KeyCode::End | KeyCode::Char('G') => 1 << 30,
+            _ => return,
+        };
+        v.list.select(step(v.list.selected(), len, delta));
+    }
+
+    /// Opens the selected repository's GitHub page in the browser.
+    fn browse_repo(&mut self) {
+        let Some((_, _, slug)) = self.github_target() else { return };
+        self.spawn_detached("gh", &github::browse_args(&slug, Kind::Issues, None), "repository opened in the browser");
+    }
+
+    /// Starts a program without waiting for it (browsers, file managers) and logs the outcome.
+    fn spawn_detached(&mut self, program: &str, args: &[String], done: &str) {
+        let child = Command::new(program).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
+        match child {
+            Ok(mut child) => {
+                std::thread::spawn(move || {
+                    let _ = child.wait(); // reap the process
+                });
+                self.log(Level::Info, done.to_string());
+            }
+            Err(e) => self.log(Level::Error, format!("cannot run {program}: {e}")),
+        }
     }
 
     // ---- git init ----
@@ -1106,16 +1248,7 @@ impl App {
     /// Opens the repository folder in the desktop file manager, without leaving the dashboard.
     fn open_files(&mut self) {
         let Some((path, name)) = self.selected().map(|r| (r.path.clone(), r.name.clone())) else { return };
-        let child = Command::new("xdg-open").arg(&path).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
-        match child {
-            Ok(mut child) => {
-                std::thread::spawn(move || {
-                    let _ = child.wait(); // reap the process
-                });
-                self.log(Level::Info, format!("{name}: opened in the file manager"));
-            }
-            Err(e) => self.log(Level::Error, format!("{name}: cannot run xdg-open: {e}")),
-        }
+        self.spawn_detached("xdg-open", &[path.display().to_string()], &format!("{name}: opened in the file manager"));
     }
 
     /// Called by the event loop after a `Launch` program exited.

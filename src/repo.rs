@@ -9,6 +9,7 @@ use std::{
 use crate::{
     config::Config,
     git::{self, FileEntry},
+    github,
 };
 
 /// Directories never searched for repositories (hidden directories are skipped as well).
@@ -41,6 +42,8 @@ pub struct Repo {
     pub behind: u32,
     pub files: Vec<FileEntry>,
     pub remote: Option<String>,
+    /// `owner/repo` when the remote lives on github.com.
+    pub slug: Option<String>,
     pub owner: Owner,
     pub last_commit: String,
     /// Unix time of the last commit; 0 when there is none.
@@ -156,6 +159,7 @@ pub fn load(path: &Path, cfg: &Config) -> Repo {
         behind: 0,
         files: Vec::new(),
         owner: classify(remote.as_deref(), cfg),
+        slug: remote.as_deref().and_then(github::slug),
         remote,
         last_commit: String::new(),
         commit_time: 0,

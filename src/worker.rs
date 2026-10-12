@@ -12,6 +12,7 @@ use std::{
 use crate::{
     config::Config,
     git::{self, DiffKind, Op},
+    github,
     repo::{self, Repo},
 };
 
@@ -31,6 +32,8 @@ pub enum Msg {
     History { id: u64, result: Result<Vec<git::Commit>, String> },
     /// The branch list (or error) requested with the given id.
     Branches { id: u64, result: Result<Vec<git::Branch>, String> },
+    /// Issues or pull requests (or the error) requested with the given id.
+    GitHub { id: u64, result: Result<Vec<github::Item>, String> },
     /// An operation finished.
     Op { path: PathBuf, label: &'static str, result: Result<String, String> },
 }
@@ -99,5 +102,12 @@ pub fn spawn_history(repo: PathBuf, id: u64, tx: Sender<Msg>) {
 pub fn spawn_branches(repo: PathBuf, id: u64, tx: Sender<Msg>) {
     thread::spawn(move || {
         let _ = tx.send(Msg::Branches { id, result: git::branches(&repo) });
+    });
+}
+
+/// Runs `f` on a background thread and delivers the message it returns.
+pub fn spawn_msg(tx: Sender<Msg>, f: impl FnOnce() -> Msg + Send + 'static) {
+    thread::spawn(move || {
+        let _ = tx.send(f());
     });
 }

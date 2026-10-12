@@ -5,6 +5,7 @@ mod banner;
 mod config;
 mod diff;
 mod git;
+mod github;
 mod logger;
 mod marks;
 mod palette;
