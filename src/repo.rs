@@ -2,6 +2,7 @@
 
 use std::{
     fs,
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
 };
 
@@ -11,7 +12,10 @@ use crate::{
 };
 
 /// Directories never searched for repositories (hidden directories are skipped as well).
-const SKIP: &[&str] = &["node_modules", "target", "__pycache__", "venv", "snap"];
+const SKIP: &[&str] = &["node_modules", "target", "__pycache__", "venv", "snap", "$RECYCLE.BIN", "System Volume Information"];
+
+/// System directories skipped only directly under `/` (a user's own `dev` or `usr` folder is still scanned).
+const ROOT_SKIP: &[&str] = &["proc", "sys", "dev", "run", "boot", "usr", "lost+found"];
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Owner {
@@ -74,14 +78,16 @@ impl Repo {
 pub fn discover(cfg: &Config) -> Vec<PathBuf> {
     let mut found = Vec::new();
     for root in &cfg.roots {
-        walk(root, cfg.depth, &mut found);
+        // Remember the root's filesystem so other mounted drives (their own roots) are not entered twice.
+        let dev = if cfg.cross_devices { None } else { fs::metadata(root).ok().map(|m| m.dev()) };
+        walk(root, cfg.depth, dev, &mut found);
     }
     found.sort();
     found.dedup();
     found
 }
 
-fn walk(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
+fn walk(dir: &Path, depth: usize, dev: Option<u64>, found: &mut Vec<PathBuf>) {
     // `.git` is a directory in normal clones and a file in worktrees and submodules.
     if dir.join(".git").exists() {
         found.push(dir.to_path_buf());
@@ -98,10 +104,13 @@ fn walk(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
         }
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if name.starts_with('.') || SKIP.contains(&&*name) {
+        if name.starts_with('.') || SKIP.contains(&&*name) || (dir == Path::new("/") && ROOT_SKIP.contains(&&*name)) {
             continue;
         }
-        walk(&entry.path(), depth - 1, found);
+        if dev.is_some_and(|d| entry.metadata().is_ok_and(|m| m.dev() != d)) {
+            continue; // a different filesystem: it is scanned as its own root
+        }
+        walk(&entry.path(), depth - 1, dev, found);
     }
 }
 

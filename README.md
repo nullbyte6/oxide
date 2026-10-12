@@ -17,6 +17,7 @@ screen, and lets you stage, commit, push, pull, fetch and merge without leaving 
 
 ## Features
 
+- **Whole machine**: scans every mounted drive (internal and external) by default, not just your home directory.
 - **Every repo at a glance**: branch, ahead/behind, staged, modified, untracked and conflicted counts.
 - **Owned vs cloned filter**: switch between *All*, *Owned* and *Cloned* repositories.
 - **Git actions**: stage/unstage (per file or all), commit, push, pull, fetch (one repo or all), merge.
@@ -51,7 +52,7 @@ oxide
 ```
 oxide [OPTIONS] [PATH...]
 
-  PATH...        directories to scan (default: config roots, else $HOME)
+  PATH...        directories to scan (default: config roots, else every mounted drive)
       --list     print the repository table to stdout and exit (no TUI)
   -h, --help     show help
   -V, --version  show the version
@@ -96,20 +97,36 @@ Everything else is **cloned**. Your owner names are your global git `user.name` 
 Optional file: `~/.config/oxide/config` (or `$XDG_CONFIG_HOME/oxide/config`).
 
 ```
-# directories to scan (repeatable); default is $HOME
+# directories to scan (repeatable); without any root, every mounted drive is scanned
 root = ~/dev
-root = ~/work
+root = /mnt/backup
 
 # extra account names that count as "owned" (repeatable)
 owner = my-company
 
 # how many directory levels below each root are searched
-depth = 5
+depth = 6
 ```
 
-Paths given on the command line override `root` entries. Hidden directories,
-`node_modules`, `target`, `venv`, `__pycache__` and `snap` are skipped, and a
-repository's subdirectories are not searched for nested repositories.
+## What gets scanned
+
+By default Oxide reads `/proc/mounts` and scans each mounted block-device filesystem
+(`/`, `/home`, external drives under `/mnt`, `/media` or `/run/media`, ...). Each drive is
+its own root and a scan never crosses onto another filesystem, so nothing is visited twice.
+Skipped: `/boot`, snap and squashfs images, network mounts, and the system directories
+`/proc`, `/sys`, `/dev`, `/run`, `/usr` (only directly under `/`).
+
+`root` entries in the config file, or paths on the command line, replace this automatic
+list; use them to scan only part of the machine or a drive that is not mounted via a block device.
+Hidden directories, `node_modules`, `target`, `venv`, `__pycache__`, `snap` and the Windows
+`$RECYCLE.BIN` / `System Volume Information` folders are always skipped, and a repository's
+subdirectories are not searched for nested repositories.
+
+## Banner
+
+The ASCII art above the dashboard is the plain text file [`src/banner.txt`](src/banner.txt).
+Paste your own art there and rebuild; no Rust escaping is needed. An empty file removes
+the banner. Each line of art costs one terminal row.
 
 ## Logs
 
@@ -135,6 +152,7 @@ run in batch mode unless you set `core.sshCommand`, `GIT_SSH_COMMAND` or `GIT_SS
 | `src/worker.rs` | Background scan and operation threads |
 | `src/config.rs` | Config file, roots and owner names |
 | `src/logger.rs` | Persistent log file |
+| `src/banner.txt` | ASCII banner shown on top of the dashboard |
 
 ## Versioning
 

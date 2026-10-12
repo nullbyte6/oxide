@@ -30,7 +30,7 @@ USAGE:
     oxide [OPTIONS] [PATH...]
 
 ARGS:
-    PATH...        Directories to scan (default: the 'root' entries of the config file, else $HOME)
+    PATH...        Directories to scan (default: 'root' entries of the config file, else every mounted drive)
 
 OPTIONS:
         --list     Print the repository table to stdout and exit (no TUI)

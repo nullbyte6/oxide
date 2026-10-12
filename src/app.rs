@@ -160,8 +160,9 @@ impl App {
             self.log(Level::Warn, "a scan is already running");
             return;
         }
-        let roots: Vec<String> = self.cfg.roots.iter().map(|r| r.display().to_string()).collect();
-        self.log(Level::Info, format!("scanning {} (depth {})", roots.join(", "), self.cfg.depth));
+        let roots: Vec<String> = self.cfg.roots.iter().take(4).map(|r| r.display().to_string()).collect();
+        let more = if self.cfg.roots.len() > 4 { ", …" } else { "" };
+        self.log(Level::Info, format!("scanning {} roots: {}{more} (depth {})", self.cfg.roots.len(), roots.join(", "), self.cfg.depth));
         self.scan = Some((0, 0));
         worker::spawn_scan(self.cfg.clone(), self.tx.clone());
     }

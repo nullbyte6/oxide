@@ -12,3 +12,9 @@ All notable changes to Oxide are recorded here, newest version first.
 - Add live search, fetch-all and `--list` plain-text output.
 - Add config file (`root`, `owner`, `depth`) and persistent log file with rotation.
 - Add LICENSE (MIT) and README with usage, keys and configuration.
+- Add ASCII banner on top of the dashboard, loaded from `src/banner.txt`.
+
+### Changed
+- Update panels with one column of inner side padding so all four sides look equally thick.
+- Update default scan to cover every mounted drive (internal and external) instead of only the home directory.
+- Update default scan depth from 5 to 6 levels.

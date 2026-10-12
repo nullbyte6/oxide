@@ -12,7 +12,7 @@ use std::{
 use crate::git;
 
 /// How many directory levels below a root are searched for repositories.
-const DEFAULT_DEPTH: usize = 5;
+const DEFAULT_DEPTH: usize = 6;
 
 pub struct Config {
     /// Directories scanned for repositories.
@@ -21,6 +21,9 @@ pub struct Config {
     pub owners: Vec<String>,
     /// Maximum scan depth below each root.
     pub depth: usize,
+    /// False for the automatic whole-machine roots: each mounted drive is its own root, so a scan
+    /// never steps onto another filesystem. Explicit roots (CLI or config) may cross mount points.
+    pub cross_devices: bool,
 }
 
 pub fn home() -> PathBuf {
@@ -53,6 +56,51 @@ pub fn expand(p: &str) -> PathBuf {
     }
 }
 
+/// Mount points of every real block-device filesystem (internal and external drives), from `/proc/mounts`.
+/// Falls back to the home directory where that file does not exist.
+fn machine_roots() -> Vec<PathBuf> {
+    let Ok(mounts) = fs::read_to_string("/proc/mounts") else { return vec![home()] };
+    let mut roots: Vec<PathBuf> = mounts
+        .lines()
+        .filter_map(|line| {
+            let mut f = line.split_whitespace();
+            let (dev, mount, fstype) = (f.next()?, f.next()?, f.next()?);
+            let mount = unescape_mount(mount);
+            // Only block devices; compressed read-only images (snap, appimage) and system mounts are noise.
+            let skip = !dev.starts_with("/dev/")
+                || matches!(fstype, "squashfs" | "erofs")
+                || ["/boot", "/snap", "/var/lib"].iter().any(|p| mount.starts_with(p));
+            (!skip).then(|| PathBuf::from(mount))
+        })
+        .collect();
+    roots.sort();
+    roots.dedup();
+    if roots.is_empty() {
+        roots.push(home());
+    }
+    roots
+}
+
+/// Decodes the `\040`-style octal escapes `/proc/mounts` uses for spaces and other characters.
+fn unescape_mount(s: &str) -> String {
+    let (b, mut out, mut i) = (s.as_bytes(), Vec::new(), 0);
+    while i < b.len() {
+        let octal = (b[i] == b'\\' && i + 3 < b.len() && b[i + 1..i + 4].iter().all(|c| (b'0'..=b'7').contains(c)))
+            .then(|| b[i + 1..i + 4].iter().fold(0u32, |n, c| n * 8 + u32::from(c - b'0')) as u8);
+        match octal {
+            Some(byte) => {
+                out.push(byte);
+                i += 4;
+            }
+            None => {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 impl Config {
     /// Builds the configuration; `cli_roots` (from the command line) replace any `root` entries.
     pub fn load(cli_roots: Vec<PathBuf>) -> Config {
@@ -77,8 +125,9 @@ impl Config {
         if !cli_roots.is_empty() {
             roots = cli_roots;
         }
-        if roots.is_empty() {
-            roots.push(home());
+        let explicit = !roots.is_empty();
+        if !explicit {
+            roots = machine_roots();
         }
 
         // The user's own git identity always counts as an owner name.
@@ -90,6 +139,6 @@ impl Config {
         owners.sort();
         owners.dedup();
 
-        Config { roots, owners, depth }
+        Config { roots, owners, depth, cross_devices: explicit }
     }
 }
