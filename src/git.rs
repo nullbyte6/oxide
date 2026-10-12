@@ -59,6 +59,14 @@ pub enum Op {
     /// Stash tracked and untracked changes.
     Stash,
     StashPop,
+    /// `git init`, creating the folder first when it does not exist.
+    Init,
+    /// Switch to a branch; `true` creates a local tracking branch from a remote one.
+    Switch(String, bool),
+    /// Create a branch from HEAD and switch to it.
+    NewBranch(String),
+    /// Delete a local branch; `true` deletes it even when it is not merged.
+    DeleteBranch(String, bool),
 }
 
 impl Op {
@@ -75,6 +83,10 @@ impl Op {
             Op::Commit(_) => "commit",
             Op::Stash => "stash",
             Op::StashPop => "stash pop",
+            Op::Init => "init",
+            Op::Switch(..) => "switch",
+            Op::NewBranch(_) => "new branch",
+            Op::DeleteBranch(..) => "delete branch",
         }
     }
 }
@@ -219,6 +231,8 @@ pub enum DiffKind {
     Staged,
     /// A file git does not track yet: shown as entirely added.
     Untracked,
+    /// A whole commit; the diff target is its hash.
+    Commit,
 }
 
 impl DiffKind {
@@ -227,6 +241,7 @@ impl DiffKind {
             DiffKind::Unstaged => "unstaged",
             DiffKind::Staged => "staged",
             DiffKind::Untracked => "untracked",
+            DiffKind::Commit => "commit",
         }
     }
 }
@@ -237,6 +252,11 @@ pub fn diff(repo: &Path, file: &str, kind: DiffKind) -> Result<String, String> {
     match kind {
         DiffKind::Unstaged => run(repo, &[&base[..], &["--", file]].concat()),
         DiffKind::Staged => run(repo, &[&base[..], &["--cached", "--", file]].concat()),
+        DiffKind::Commit if file.starts_with('-') => Err(format!("invalid commit '{file}'")),
+        DiffKind::Commit => {
+            let format = "--format=commit %H%nAuthor: %an <%ae>%nDate:   %ad%n%n%w(0,4,4)%B";
+            run(repo, &["-c", "core.quotepath=off", "show", "--no-color", "--no-ext-diff", "--no-renames", format, file])
+        }
         DiffKind::Untracked if file.ends_with('/') => {
             // Git lists a wholly untracked directory as one entry; show what is inside it.
             let list = run(repo, &["ls-files", "--others", "--exclude-standard", "--", file])?;
@@ -248,6 +268,85 @@ pub fn diff(repo: &Path, file: &str, kind: DiffKind) -> Result<String, String> {
             if out.is_empty() && !err.is_empty() { Err(err) } else { Ok(out) }
         }
     }
+}
+
+/// One entry of the commit log.
+pub struct Commit {
+    pub hash: String,
+    pub author: String,
+    /// Relative date, e.g. `3 days ago`.
+    pub date: String,
+    /// Branches and tags pointing at the commit, e.g. `HEAD -> main, origin/main`.
+    pub refs: String,
+    pub subject: String,
+}
+
+/// The last `limit` commits reachable from HEAD, newest first.
+pub fn log(repo: &Path, limit: usize) -> Result<Vec<Commit>, String> {
+    let n = format!("-n{limit}");
+    let out = run(repo, &["log", &n, "--format=%h%x1f%an%x1f%cr%x1f%D%x1f%s"])?;
+    Ok(out
+        .lines()
+        .filter_map(|l| {
+            let mut f = l.split('\x1f');
+            Some(Commit {
+                hash: f.next()?.to_string(),
+                author: f.next()?.to_string(),
+                date: f.next()?.to_string(),
+                refs: f.next()?.to_string(),
+                subject: f.next().unwrap_or("").to_string(),
+            })
+        })
+        .collect())
+}
+
+/// A local or remote-tracking branch.
+pub struct Branch {
+    /// Short name: `main` or `origin/main`.
+    pub name: String,
+    pub remote: bool,
+    pub current: bool,
+    /// Already merged into HEAD, so it can be deleted safely.
+    pub merged: bool,
+    /// No commit for more than 90 days.
+    pub stale: bool,
+    /// Upstream and sync state, e.g. `origin/main [ahead 1]`.
+    pub upstream: String,
+    pub date: String,
+}
+
+/// Local branches first, then remote-tracking ones.
+pub fn branches(repo: &Path) -> Result<Vec<Branch>, String> {
+    let fmt = "--format=%(HEAD)%1f%(refname)%1f%(refname:short)%1f%(upstream:short)%1f%(upstream:track)%1f%(committerdate:unix)%1f%(committerdate:relative)";
+    let out = run(repo, &["for-each-ref", fmt, "refs/heads", "refs/remotes"])?;
+    // Merged-ness needs a commit to compare with; a repository without commits has no branches anyway.
+    let merged = run(repo, &["for-each-ref", "--merged=HEAD", "--format=%(refname)", "refs/heads", "refs/remotes"]).unwrap_or_default();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+    Ok(out
+        .lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split('\x1f').collect();
+            let [head, full, name, upstream, track, ts, date] = f[..] else { return None };
+            if full.ends_with("/HEAD") {
+                return None; // the `origin/HEAD` pointer is not a branch
+            }
+            let ts: i64 = ts.parse().unwrap_or(now);
+            let upstream = match (upstream.is_empty(), track.is_empty()) {
+                (true, _) => String::new(),
+                (false, true) => upstream.to_string(),
+                (false, false) => format!("{upstream} {track}"),
+            };
+            Some(Branch {
+                name: name.to_string(),
+                remote: full.starts_with("refs/remotes/"),
+                current: head == "*",
+                merged: merged.lines().any(|m| m == full),
+                stale: now - ts > 90 * 24 * 3600,
+                upstream,
+                date: date.to_string(),
+            })
+        })
+        .collect())
 }
 
 /// Runs `op` in `repo`; the Ok/Err text is the command output for the log.
@@ -273,6 +372,17 @@ pub fn perform(repo: &Path, op: &Op) -> Result<String, String> {
         Op::Commit(msg) => run_all(repo, &["commit", "-m", msg]),
         Op::Stash => run_all(repo, &["stash", "push", "--include-untracked", "-m", "oxide stash"]),
         Op::StashPop => run_all(repo, &["stash", "pop"]),
+        Op::Init => {
+            std::fs::create_dir_all(repo).map_err(|e| format!("cannot create {}: {e}", repo.display()))?;
+            run_all(repo, &["init"])
+        }
+        Op::Switch(name, _) | Op::NewBranch(name) | Op::DeleteBranch(name, _) if name.is_empty() || name.starts_with('-') => {
+            Err(format!("invalid branch name '{name}'"))
+        }
+        Op::Switch(name, true) => run_all(repo, &["switch", "--track", name]),
+        Op::Switch(name, false) => run_all(repo, &["switch", name]),
+        Op::NewBranch(name) => run_all(repo, &["switch", "-c", name]),
+        Op::DeleteBranch(name, force) => run_all(repo, &["branch", if *force { "-D" } else { "-d" }, "--", name]),
     }
 }
 

@@ -27,6 +27,10 @@ pub enum Msg {
     ScanDone(u128),
     /// The diff text (or error) requested with the given id.
     Diff { id: u64, result: Result<String, String> },
+    /// The commit log (or error) requested with the given id.
+    History { id: u64, result: Result<Vec<git::Commit>, String> },
+    /// The branch list (or error) requested with the given id.
+    Branches { id: u64, result: Result<Vec<git::Branch>, String> },
     /// An operation finished.
     Op { path: PathBuf, label: &'static str, result: Result<String, String> },
 }
@@ -67,8 +71,12 @@ pub fn spawn_ops(jobs: Vec<(PathBuf, Op)>, cfg: Arc<Config>, tx: Sender<Msg>) {
     thread::spawn(move || {
         pool(jobs, |(path, op)| {
             let result = git::perform(&path, &op);
+            let failed_init = matches!(op, Op::Init) && result.is_err();
             let _ = tx.send(Msg::Op { path: path.clone(), label: op.label(), result });
-            let _ = tx.send(Msg::Repo(repo::load(&path, &cfg)));
+            // A failed init leaves no repository, so there is nothing to load (it would show as a broken one).
+            if !failed_init {
+                let _ = tx.send(Msg::Repo(repo::load(&path, &cfg)));
+            }
         });
     });
 }
@@ -77,5 +85,19 @@ pub fn spawn_ops(jobs: Vec<(PathBuf, Op)>, cfg: Arc<Config>, tx: Sender<Msg>) {
 pub fn spawn_diff(repo: PathBuf, file: String, kind: DiffKind, id: u64, tx: Sender<Msg>) {
     thread::spawn(move || {
         let _ = tx.send(Msg::Diff { id, result: git::diff(&repo, &file, kind) });
+    });
+}
+
+/// Loads the commit log in the background.
+pub fn spawn_history(repo: PathBuf, id: u64, tx: Sender<Msg>) {
+    thread::spawn(move || {
+        let _ = tx.send(Msg::History { id, result: git::log(&repo, 500) });
+    });
+}
+
+/// Loads the branch list in the background.
+pub fn spawn_branches(repo: PathBuf, id: u64, tx: Sender<Msg>) {
+    thread::spawn(move || {
+        let _ = tx.send(Msg::Branches { id, result: git::branches(&repo) });
     });
 }

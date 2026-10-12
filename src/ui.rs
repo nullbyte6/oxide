@@ -19,7 +19,7 @@ use crate::{
     app::{App, Filter, Focus, InputKind, Mode},
     banner,
     diff::{Row, Sign},
-    git::FileEntry,
+    git::{Branch, DiffKind, FileEntry},
     logger::{self, Level},
     repo::{Health, Owner, Repo},
     syntax::Tok,
@@ -99,8 +99,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_details(f, app, right);
     draw_log(f, app, log);
     draw_footer(f, app, footer);
-    if app.mode == Mode::Diff {
-        draw_diff(f, app);
+    // A pending confirmation is drawn on top of the view it was asked from.
+    let view = match (app.mode, &app.confirm) {
+        (Mode::Confirm, Some(c)) => c.back,
+        (mode, _) => mode,
+    };
+    match view {
+        Mode::Diff => draw_diff(f, app),
+        Mode::History => draw_history(f, app),
+        Mode::Branches => draw_branches(f, app),
+        _ => {}
     }
     if app.mode == Mode::Help {
         draw_help(f);
@@ -406,6 +414,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             InputKind::Commit => format!("commit message → {}", app.selected().map_or("", |r| r.name.as_str())),
             InputKind::Merge => format!("merge into {} (empty = upstream)", app.selected().map_or("", |r| r.branch.as_str())),
             InputKind::Search => "search".to_string(),
+            InputKind::Branch => format!("new branch from {}", app.selected().map_or("", |r| r.branch.as_str())),
+            InputKind::Init => "git init in folder (created if missing)".to_string(),
         };
         let line = Line::from(vec![
             Span::styled(format!(" {prompt} ▸ "), hue(BOLD, ACCENT)),
@@ -429,6 +439,17 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             spans.push(Span::styled(format!(" {what}  "), DIM));
         }
         f.render_widget(Paragraph::new(Line::from(spans)), area);
+        return;
+    }
+
+    if app.mode == Mode::History {
+        let hints = [("↑↓", "move"), ("Enter", "show the commit"), ("g G", "newest/oldest"), ("Esc", "close")];
+        f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
+        return;
+    }
+    if app.mode == Mode::Branches {
+        let hints = [("↑↓", "move"), ("Enter", "switch"), ("n", "new"), ("d", "delete"), ("D", "force delete"), ("m", "merge"), ("Esc", "close")];
+        f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
         return;
     }
 
@@ -498,6 +519,7 @@ fn diff_line(row: &Row, num_w: usize, hscroll: usize) -> Line<'static> {
     let blank = " ".repeat(num_w * 2 + 2);
     match row {
         Row::Meta(s) | Row::Note(s) => Line::from(Span::styled(format!("{blank}{s}"), DIM.add_modifier(Modifier::ITALIC))),
+        Row::File(s) => Line::from(vec![Span::styled(format!("{} ", "━".repeat(num_w * 2 + 2)), DIM), Span::styled(s.clone(), hue(BOLD, WARN))]),
         Row::Hunk(s) => Line::from(Span::styled(format!("{blank}{s}"), hue(BOLD, ACCENT))),
         Row::Line { sign, old, new, toks } => {
             let num = |n: &Option<u32>| n.map_or_else(|| " ".repeat(num_w), |n| format!("{n:>num_w$}"));
@@ -518,7 +540,12 @@ fn draw_diff(f: &mut Frame, app: &mut App) {
     let [area, _] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(f.area());
     let Some(v) = app.diff.as_mut() else { return };
     let name = v.repo.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-    let mut block = pane(format!(" Diff · {name}/{} · {} ", v.file, v.kind.label()), true);
+    let title = if v.kind == DiffKind::Commit {
+        format!(" Commit · {name} · {} ", v.file)
+    } else {
+        format!(" Diff · {name}/{} · {} ", v.file, v.kind.label())
+    };
+    let mut block = pane(title, true);
     v.height = area.height.saturating_sub(2) as usize;
     f.render_widget(Clear, area);
 
@@ -552,6 +579,101 @@ fn draw_diff(f: &mut Frame, app: &mut App) {
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
+/// Footer key caps with their labels.
+fn hint_spans(hints: &[(&str, &str)]) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    for (key, what) in hints {
+        spans.push(Span::styled(format!(" {key} "), hue(KEYCAP, ACCENT)));
+        spans.push(Span::styled(format!(" {what}  "), DIM));
+    }
+    spans
+}
+
+/// The commit log: a full-screen list, newest commit first.
+fn draw_history(f: &mut Frame, app: &mut App) {
+    let [area, _] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(f.area());
+    let Some(v) = app.history.as_mut() else { return };
+    f.render_widget(Clear, area);
+    let count = v.commits.as_ref().map_or(String::new(), |c| format!(" ({})", c.len()));
+    let block = pane(format!(" Log · {} · {}{count} ", v.name, v.branch), true);
+    let note = |msg: String, f: &mut Frame, block: Block<'static>| {
+        f.render_widget(Paragraph::new(msg).style(DIM.add_modifier(Modifier::ITALIC)).block(block), area);
+    };
+    if let Some(e) = &v.error {
+        return note(format!("git log failed: {}", e.lines().next().unwrap_or("")), f, block);
+    }
+    let Some(commits) = &v.commits else { return note("Loading commits…".to_string(), f, block) };
+    if commits.is_empty() {
+        return note("No commits yet.".to_string(), f, block);
+    }
+    let items: Vec<ListItem> = commits
+        .iter()
+        .map(|c| {
+            let mut spans = vec![
+                Span::styled(format!("{:<8}", c.hash), hue(DIM, WARN)),
+                Span::styled(fit(&c.date, 15), DIM),
+                Span::styled(fit(&c.author, 16), hue(PLAIN, INFO)),
+                Span::raw(" "),
+            ];
+            if !c.refs.is_empty() {
+                spans.push(Span::styled(format!("({}) ", c.refs), hue(BOLD, ACCENT)));
+            }
+            spans.push(Span::styled(c.subject.clone(), PLAIN));
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+    f.render_stateful_widget(List::new(items).block(block).highlight_style(INVERSE), area, &mut v.state);
+}
+
+/// Colored label for a branch, if any: merged and stale ones are candidates for cleanup.
+fn branch_tags(b: &Branch) -> Vec<Span<'static>> {
+    let mut tags = Vec::new();
+    if b.merged && !b.current {
+        tags.push(Span::styled("merged ", hue(PLAIN, GOOD)));
+    }
+    if b.stale {
+        tags.push(Span::styled("stale ", hue(PLAIN, WARN)));
+    }
+    tags
+}
+
+/// The branch list as a popup, with the newest log message below it so the result of an action is visible.
+fn draw_branches(f: &mut Frame, app: &mut App) {
+    let last = app.log.last().map(|l| l.text.clone()).unwrap_or_default();
+    let Some(v) = app.branches.as_mut() else { return };
+    let rows = v.branches.as_ref().map_or(1, Vec::len) as u16;
+    let area = f.area();
+    let w = 96.min(area.width);
+    let h = (rows + 2).clamp(5, area.height.saturating_sub(2).max(5)).min(area.height);
+    let [_, mid, _] = Layout::vertical([Constraint::Fill(1), Constraint::Length(h), Constraint::Fill(1)]).areas(area);
+    let [_, popup, _] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(w), Constraint::Fill(1)]).areas(mid);
+    f.render_widget(Clear, popup);
+    let block = pane(format!(" Branches · {} ", v.name), true).title_bottom(Line::from(Span::styled(format!(" {last} "), DIM)));
+
+    if let Some(e) = &v.error {
+        let msg = format!("git branch failed: {}", e.lines().next().unwrap_or(""));
+        return f.render_widget(Paragraph::new(msg).style(DIM.add_modifier(Modifier::ITALIC)).block(block), popup);
+    }
+    let Some(list) = &v.branches else {
+        return f.render_widget(Paragraph::new("Loading branches…").style(DIM.add_modifier(Modifier::ITALIC)).block(block), popup);
+    };
+    let items: Vec<ListItem> = list
+        .iter()
+        .map(|b| {
+            let name_style = if b.current { hue(BOLD, GOOD) } else if b.remote { DIM } else { PLAIN };
+            let mut spans = vec![
+                Span::styled(if b.current { "● " } else { "  " }, hue(BOLD, GOOD)),
+                Span::styled(fit(&b.name, 30), name_style),
+                Span::styled(fit(&b.upstream, 26), hue(DIM, ACCENT)),
+            ];
+            spans.extend(branch_tags(b));
+            spans.push(Span::styled(b.date.clone(), DIM));
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+    f.render_stateful_widget(List::new(items).block(block).highlight_style(INVERSE), popup, &mut v.state);
+}
+
 fn draw_help(f: &mut Frame) {
     let rows: &[(&str, &str)] = &[
         ("↑ ↓ / j k, g G", "move selection, first / last"),
@@ -567,16 +689,15 @@ fn draw_help(f: &mut Frame) {
         ("L / U", "pull every behind / push every ahead repository in view"),
         ("m", "merge a branch (empty = upstream)"),
         ("z / Z", "stash all changes / pop the latest stash"),
-        ("d", "diff of the highlighted file (in the viewer: Esc closes)"),
-        ("e / t / o", "editor on the file or repository / shell / file manager"),
+        ("d / v / b", "diff of the highlighted file / commit log / branches"),
+        ("I", "git init in any folder (created if missing)"),
+        ("e / t / o", "yazi on the file or repository / shell / file manager"),
         ("* / x / H", "pin / ignore the repository / show ignored ones"),
         ("r / R", "reload selected repository / rescan all roots"),
-        ("?  q, Ctrl+C", "this help / quit"),
-        ("", ""),
+        ("?  q, Ctrl+C", "this help (any key closes it) / quit"),
         ("↑n ↓n", "commits ahead / behind upstream"),
         ("+ ~ ? ! $", "staged · modified · untracked · conflicts · stashes"),
         ("★ ⊘", "pinned · ignored"),
-        ("", "Any key closes this window."),
     ];
     let lines: Vec<Line> = rows
         .iter()

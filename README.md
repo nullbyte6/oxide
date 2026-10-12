@@ -23,7 +23,9 @@ screen, and lets you stage, commit, push, pull, fetch and merge without leaving 
 - **Sorting, pinning and hiding**: sort by name, last commit, changes or commits behind; pin favourites to the top and ignore noisy repositories.
 - **Git actions**: stage/unstage (per file or all), commit, push, pull, fetch (one repo or all), merge, stash and pop; pull or push every repository in view at once.
 - **Diff viewer with syntax highlighting**: read the staged, unstaged or untracked diff of any changed file with line numbers and per-language colors, without leaving Oxide.
-- **Jump out**: open the selected file or repository in your editor, a shell or the file manager.
+- **Commit log and branches**: browse a repository's history and open any commit's diff; list, switch, create, merge and delete branches, with merged and stale ones flagged.
+- **`git init` anywhere**: initialise a repository in any folder, existing or new, and see it in the list right away.
+- **Jump out**: open the selected file or repository in yazi, a shell or the file manager.
 - **Non-blocking**: scans and git commands run on background threads; the UI never freezes.
 - **Search**: filter the list live by name, branch or path.
 - **Logs**: an in-app log panel plus a persistent log file.
@@ -85,13 +87,43 @@ oxide [OPTIONS] [PATH...]
 | `L` | Pull (fast-forward only) every repository in the view that is behind its upstream |
 | `U` | Push every repository in the view that is ahead of its upstream (asks `y` to confirm) |
 | `z` / `Z` | Stash all changes including untracked files / pop the latest stash |
-| `e` | Open the highlighted file (repository list focused: the repository) in `$VISUAL` / `$EDITOR` |
+| `v` | Commit log of the selected repository (see below) |
+| `b` | Branches of the selected repository (see below) |
+| `I` | `git init` in a folder: the prompt starts with the current directory, append a name for a new folder |
+| `e` | Open [yazi](https://yazi-rs.github.io) in the repository, with the highlighted file revealed when the changes list is focused. Open files from yazi with your usual opener (e.g. nvim). Without yazi installed it falls back to `$VISUAL` / `$EDITOR` |
 | `t` | Open `$SHELL` in the repository; exit it to return |
 | `o` | Open the repository folder in the file manager (`xdg-open`) |
 | `m` | Merge a branch into the current one (empty input merges the upstream) |
 | `r` / `R` | Reload the selected repository / rescan all roots |
 | `?` | Help |
 | `q`, `Ctrl+C` | Quit |
+
+### Commit log
+
+`v` lists the last 500 commits of the current branch with hash, age, author, branches and tags, and subject.
+`Enter` (or `d`) opens the commit in the diff viewer, one section per file; `Esc` there returns to the log.
+Keys: `↑` `↓` / `j` `k`, `Space` / `PgDn`, `b` / `PgUp`, `g` / `G`, `Esc` / `q` / `v` to close.
+
+### Branches
+
+`b` lists local branches first, then remote-tracking ones, with the upstream and its ahead/behind state,
+a green `merged` tag when the branch is already merged into the current one and a yellow `stale` tag when
+its last commit is older than 90 days. The last log message shows below the list, so the result of an
+action stays visible.
+
+| Key | Action |
+| --- | --- |
+| `Enter` | Switch to the branch (a remote branch gets a local tracking branch) |
+| `n` | Create a branch from the current one and switch to it |
+| `d` / `D` | Delete a local branch (`d` only if it is merged, `D` even if it is not); asks `y` to confirm |
+| `m` | Merge the branch into the current one (asks `y` to confirm) |
+| `Esc`, `q`, `b` | Close |
+
+### git init
+
+`I` asks for a folder. A relative path starts from the directory Oxide was launched in and `~` is expanded;
+a folder that does not exist is created. The new repository appears in the list and is selected. A repository
+outside the scan roots disappears on the next full rescan (`R`), so add its folder as a `root` to keep it.
 
 ### Diff viewer
 

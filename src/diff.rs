@@ -15,6 +15,8 @@ pub enum Sign {
 pub enum Row {
     /// Header information worth keeping: new/deleted file, renames, binary files, modes.
     Meta(String),
+    /// The file a diff section belongs to (a commit can touch many files).
+    File(String),
     /// `@@ -a,b +c,d @@ section`.
     Hunk(String),
     /// `\ No newline at end of file` and similar notes.
@@ -52,7 +54,7 @@ fn hunk_start(header: &str) -> (u32, u32) {
 
 /// Parses unified diff text of one file; `file` picks the language used for highlighting.
 pub fn parse(text: &str, file: &str) -> Diff {
-    let lang = syntax::lang_for(file);
+    let mut lang = syntax::lang_for(file);
     let mut d = Diff { rows: Vec::new(), hunks: Vec::new(), added: 0, removed: 0, num_w: 1, truncated: false };
     let (mut in_hunk, mut cols) = (false, 1);
     let (mut old_n, mut new_n) = (0u32, 0u32);
@@ -63,6 +65,15 @@ pub fn parse(text: &str, file: &str) -> Diff {
         if d.rows.len() >= MAX_ROWS {
             d.truncated = true;
             break;
+        }
+        // A new file section. Content lines always start with a sign or a space, so this is unambiguous.
+        if let Some(head) = raw.strip_prefix("diff --git ").or_else(|| raw.strip_prefix("diff --cc ")) {
+            let name = head.rsplit_once(" b/").map_or(head, |(_, b)| b).trim_start_matches("a/");
+            in_hunk = false;
+            lang = syntax::lang_for(name);
+            (old_state, new_state) = (State::Normal, State::Normal);
+            d.rows.push(Row::File(clean(name)));
+            continue;
         }
         if raw.starts_with("@@") {
             in_hunk = true;

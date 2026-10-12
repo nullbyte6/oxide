@@ -15,9 +15,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::ListState;
 
 use crate::{
-    config::Config,
+    config::{self, Config},
     diff::{self, Diff},
-    git::{DiffKind, Op},
+    git::{Branch, Commit, DiffKind, Op},
     logger::{self, Level, Logger},
     marks::{Mark, Marks},
     repo::{Health, Owner, Repo},
@@ -155,13 +155,45 @@ pub struct DiffView {
     pub height: usize,
     /// True when the file has both staged and unstaged changes, so `Tab` can switch between them.
     pub both: bool,
+    /// The mode to return to when the viewer closes (the dashboard, or the commit log).
+    back: Mode,
     id: u64,
 }
 
-/// A bulk operation waiting for a yes.
+/// The commit log of one repository.
+pub struct HistoryView {
+    pub repo: PathBuf,
+    pub name: String,
+    pub branch: String,
+    /// None while the log is loading.
+    pub commits: Option<Vec<Commit>>,
+    pub error: Option<String>,
+    pub state: ListState,
+    id: u64,
+}
+
+/// The branches of one repository.
+pub struct BranchView {
+    pub repo: PathBuf,
+    pub name: String,
+    pub branches: Option<Vec<Branch>>,
+    pub error: Option<String>,
+    pub state: ListState,
+    id: u64,
+}
+
+impl BranchView {
+    fn selected(&self) -> Option<&Branch> {
+        self.branches.as_ref()?.get(self.state.selected()?)
+    }
+}
+
+/// A destructive or bulk operation waiting for a yes.
 pub struct Confirm {
     pub prompt: String,
     jobs: Vec<(PathBuf, Op)>,
+    /// The mode to return to afterwards.
+    pub back: Mode,
 }
 
 /// Which pane receives navigation keys.
@@ -177,6 +209,10 @@ pub enum InputKind {
     Commit,
     Merge,
     Search,
+    /// Name of a new branch.
+    Branch,
+    /// Folder to run `git init` in.
+    Init,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -187,6 +223,10 @@ pub enum Mode {
     Confirm,
     /// The diff viewer (`App::diff`) is open.
     Diff,
+    /// The commit log (`App::history`) is open.
+    History,
+    /// The branch list (`App::branches`) is open.
+    Branches,
     Help,
 }
 
@@ -224,6 +264,12 @@ pub struct App {
     pub quit: bool,
     pub confirm: Option<Confirm>,
     pub diff: Option<DiffView>,
+    pub history: Option<HistoryView>,
+    pub branches: Option<BranchView>,
+    /// Mode to return to when the input line closes (the dashboard, or the branch list).
+    input_back: Mode,
+    /// A repository just created with `git init`, selected as soon as it is loaded.
+    pending_select: Option<PathBuf>,
     diff_id: u64,
     /// A terminal program requested by the user; taken and run by the event loop.
     pub launch: Option<Launch>,
@@ -269,6 +315,10 @@ impl App {
             quit: false,
             confirm: None,
             diff: None,
+            history: None,
+            branches: None,
+            input_back: Mode::Normal,
+            pending_select: None,
             diff_id: 0,
             launch: None,
             logger: Logger::open(),
@@ -344,11 +394,20 @@ impl App {
                     if let Some((done, _)) = &mut self.scan {
                         *done += 1;
                     }
-                    match self.repos.iter_mut().find(|r| r.path == repo.path) {
+                    let path = repo.path.clone();
+                    match self.repos.iter_mut().find(|r| r.path == path) {
                         Some(slot) => *slot = repo,
                         None => self.repos.push(repo),
                     }
                     self.rebuild();
+                    if self.pending_select.as_ref() == Some(&path) {
+                        self.pending_select = None;
+                        if let Some(i) = self.visible.iter().position(|&r| self.repos[r].path == path) {
+                            self.repo_state.select(Some(i));
+                            self.file_state.select(None);
+                            self.clamp_files();
+                        }
+                    }
                 }
                 Msg::ScanDone(ms) => {
                     self.scan = None;
@@ -357,6 +416,32 @@ impl App {
                     self.repos.retain(|r| keep.contains(&r.path));
                     self.rebuild();
                     self.log(Level::Ok, format!("scan finished: {} repositories in {ms} ms", self.repos.len()));
+                }
+                Msg::History { id, result } => {
+                    if let Some(v) = self.history.as_mut().filter(|v| v.id == id) {
+                        match result {
+                            Ok(commits) => {
+                                v.state.select(if commits.is_empty() { None } else { Some(0) });
+                                v.commits = Some(commits);
+                            }
+                            Err(e) => v.error = Some(e),
+                        }
+                    }
+                }
+                Msg::Branches { id, result } => {
+                    if let Some(v) = self.branches.as_mut().filter(|v| v.id == id) {
+                        match result {
+                            Ok(list) => {
+                                // Keep the cursor on the same branch after a reload; start on the current one.
+                                let keep = v.selected().map(|b| b.name.clone());
+                                let at = list.iter().position(|b| Some(&b.name) == keep.as_ref()).or_else(|| list.iter().position(|b| b.current));
+                                v.state.select(at.or(if list.is_empty() { None } else { Some(0) }));
+                                v.branches = Some(list);
+                                v.error = None;
+                            }
+                            Err(e) => v.error = Some(e),
+                        }
+                    }
                 }
                 Msg::Diff { id, result } => {
                     if let Some(view) = self.diff.as_mut().filter(|v| v.id == id) {
@@ -368,6 +453,9 @@ impl App {
                 }
                 Msg::Op { path, label, result } => {
                     self.busy.remove(&path);
+                    if self.branches.as_ref().is_some_and(|v| v.repo == path) {
+                        self.load_branches(); // switching, creating or deleting changed the list
+                    }
                     let name = dir_name(&path);
                     match result {
                         Ok(out) => {
@@ -441,6 +529,8 @@ impl App {
             Mode::Input(kind) => self.on_input_key(kind, key),
             Mode::Confirm => self.on_confirm_key(key),
             Mode::Diff => self.on_diff_key(key),
+            Mode::History => self.on_history_key(key),
+            Mode::Branches => self.on_branch_key(key),
             Mode::Normal => self.on_normal_key(key),
         }
     }
@@ -472,6 +562,9 @@ impl App {
             KeyCode::Char('3') => self.set_filter(Filter::Cloned),
             KeyCode::Char('4') => self.set_filter(Filter::Attention),
             KeyCode::Char('d') => self.open_diff(),
+            KeyCode::Char('v') => self.open_history(),
+            KeyCode::Char('b') => self.open_branches(),
+            KeyCode::Char('I') => self.open_init(),
             KeyCode::Char('s') => self.cycle_sort(),
             KeyCode::Char('C') => {
                 self.color = !self.color;
@@ -533,10 +626,15 @@ impl App {
         };
         let both = f.staged() && f.unstaged() && !f.conflict();
         let (repo, file) = (r.path.clone(), f.path.clone());
+        self.start_diff(repo, file, kind, both, Mode::Normal);
+    }
+
+    /// Opens the diff viewer on `target` (a file, or a commit hash for `DiffKind::Commit`).
+    fn start_diff(&mut self, repo: PathBuf, target: String, kind: DiffKind, both: bool, back: Mode) {
         self.diff_id += 1;
         self.diff = Some(DiffView {
             repo: repo.clone(),
-            file: file.clone(),
+            file: target.clone(),
             kind,
             diff: None,
             error: None,
@@ -544,10 +642,153 @@ impl App {
             hscroll: 0,
             height: 20,
             both,
+            back,
             id: self.diff_id,
         });
         self.mode = Mode::Diff;
-        worker::spawn_diff(repo, file, kind, self.diff_id, self.tx.clone());
+        worker::spawn_diff(repo, target, kind, self.diff_id, self.tx.clone());
+    }
+
+    // ---- commit log ----
+
+    fn open_history(&mut self) {
+        let Some((repo, name, branch)) = self.selected().map(|r| (r.path.clone(), r.name.clone(), r.branch.clone())) else { return };
+        self.diff_id += 1;
+        worker::spawn_history(repo.clone(), self.diff_id, self.tx.clone());
+        self.history = Some(HistoryView { repo, name, branch, commits: None, error: None, state: ListState::default(), id: self.diff_id });
+        self.mode = Mode::History;
+    }
+
+    fn on_history_key(&mut self, key: KeyEvent) {
+        let Some(v) = self.history.as_mut() else {
+            self.mode = Mode::Normal;
+            return;
+        };
+        let len = v.commits.as_ref().map_or(0, Vec::len);
+        let delta = match key.code {
+            KeyCode::Esc | KeyCode::Char('q' | 'v') => {
+                self.history = None;
+                self.mode = Mode::Normal;
+                return;
+            }
+            KeyCode::Down | KeyCode::Char('j') => 1,
+            KeyCode::Up | KeyCode::Char('k') => -1,
+            KeyCode::PageDown | KeyCode::Char(' ') => 15,
+            KeyCode::PageUp | KeyCode::Char('b') => -15,
+            KeyCode::Home | KeyCode::Char('g') => -(1 << 30),
+            KeyCode::End | KeyCode::Char('G') => 1 << 30,
+            KeyCode::Enter | KeyCode::Char('d') => {
+                let hash = v.commits.as_ref().and_then(|c| c.get(v.state.selected()?)).map(|c| c.hash.clone());
+                if let Some(hash) = hash {
+                    let repo = v.repo.clone();
+                    self.start_diff(repo, hash, DiffKind::Commit, false, Mode::History);
+                }
+                return;
+            }
+            _ => return,
+        };
+        v.state.select(step(v.state.selected(), len, delta));
+    }
+
+    // ---- branches ----
+
+    fn open_branches(&mut self) {
+        let Some((repo, name)) = self.selected().map(|r| (r.path.clone(), r.name.clone())) else { return };
+        self.branches = Some(BranchView { repo, name, branches: None, error: None, state: ListState::default(), id: 0 });
+        self.mode = Mode::Branches;
+        self.load_branches();
+    }
+
+    fn load_branches(&mut self) {
+        self.diff_id += 1;
+        if let Some(v) = self.branches.as_mut() {
+            v.id = self.diff_id;
+            worker::spawn_branches(v.repo.clone(), v.id, self.tx.clone());
+        }
+    }
+
+    fn on_branch_key(&mut self, key: KeyEvent) {
+        let Some(v) = self.branches.as_mut() else {
+            self.mode = Mode::Normal;
+            return;
+        };
+        let len = v.branches.as_ref().map_or(0, Vec::len);
+        let repo = v.repo.clone();
+        let picked = v.selected().map(|b| (b.name.clone(), b.remote, b.current, b.merged));
+        let delta = match key.code {
+            KeyCode::Esc | KeyCode::Char('q' | 'b') => {
+                self.branches = None;
+                self.mode = Mode::Normal;
+                return;
+            }
+            KeyCode::Down | KeyCode::Char('j') => 1,
+            KeyCode::Up | KeyCode::Char('k') => -1,
+            KeyCode::PageDown | KeyCode::Char(' ') => 10,
+            KeyCode::PageUp => -10,
+            KeyCode::Home | KeyCode::Char('g') => -(1 << 30),
+            KeyCode::End | KeyCode::Char('G') => 1 << 30,
+            KeyCode::Char('n') => {
+                self.open_input(InputKind::Branch);
+                return;
+            }
+            _ => {
+                let Some((name, remote, current, merged)) = picked else { return };
+                match key.code {
+                    KeyCode::Enter if current => self.log(Level::Info, format!("already on {name}")),
+                    KeyCode::Enter => self.run_ops(vec![(repo, Op::Switch(name, remote))]),
+                    KeyCode::Char('m') if current => self.log(Level::Warn, "cannot merge a branch into itself"),
+                    KeyCode::Char('m') => self.ask(format!("merge {name} into the current branch?"), vec![(repo, Op::Merge(name))]),
+                    KeyCode::Char(c @ ('d' | 'D')) => {
+                        if remote {
+                            self.log(Level::Warn, "remote branches are not deleted from here");
+                        } else if current {
+                            self.log(Level::Warn, "cannot delete the branch you are on; switch first");
+                        } else if c == 'd' && !merged {
+                            self.log(Level::Warn, format!("{name} is not merged; press D to delete it anyway"));
+                        } else {
+                            let how = if c == 'D' && !merged { "delete UNMERGED branch" } else { "delete branch" };
+                            self.ask(format!("{how} {name}?"), vec![(repo, Op::DeleteBranch(name, c == 'D'))]);
+                        }
+                    }
+                    _ => {}
+                }
+                return;
+            }
+        };
+        v.state.select(step(v.state.selected(), len, delta));
+    }
+
+    /// Asks for a yes before running `jobs`, then returns to the current mode.
+    fn ask(&mut self, prompt: String, jobs: Vec<(PathBuf, Op)>) {
+        self.confirm = Some(Confirm { prompt, jobs, back: self.mode });
+        self.mode = Mode::Confirm;
+    }
+
+    // ---- git init ----
+
+    /// Prompts for a folder; the input starts with the current directory so a new folder name can be appended.
+    fn open_init(&mut self) {
+        self.open_input(InputKind::Init);
+        if let Ok(dir) = std::env::current_dir() {
+            self.input = format!("{}/", dir.display());
+        }
+    }
+
+    fn init_repo(&mut self, text: &str) {
+        if text.is_empty() {
+            self.log(Level::Warn, "no folder given, git init cancelled");
+            return;
+        }
+        let mut path = config::expand(text);
+        if path.is_relative() {
+            path = std::env::current_dir().unwrap_or_default().join(path);
+        }
+        if path.join(".git").exists() {
+            self.log(Level::Warn, format!("{} is already a git repository", path.display()));
+            return;
+        }
+        self.pending_select = Some(path.clone());
+        self.run_ops(vec![(path, Op::Init)]);
     }
 
     fn on_diff_key(&mut self, key: KeyEvent) {
@@ -559,8 +800,8 @@ impl App {
         let max = v.diff.as_ref().map_or(0, |d| d.rows.len().saturating_sub(v.height));
         match key.code {
             KeyCode::Esc | KeyCode::Char('q' | 'd') => {
+                self.mode = v.back;
                 self.diff = None;
-                self.mode = Mode::Normal;
             }
             KeyCode::Down | KeyCode::Char('j') => v.scroll = (v.scroll + 1).min(max),
             KeyCode::Up | KeyCode::Char('k') => v.scroll = v.scroll.saturating_sub(1),
@@ -595,8 +836,11 @@ impl App {
     }
 
     fn on_confirm_key(&mut self, key: KeyEvent) {
-        self.mode = Mode::Normal;
-        let Some(confirm) = self.confirm.take() else { return };
+        let Some(confirm) = self.confirm.take() else {
+            self.mode = Mode::Normal;
+            return;
+        };
+        self.mode = confirm.back;
         if key.code == KeyCode::Char('y') {
             self.run_ops(confirm.jobs);
         } else {
@@ -608,7 +852,7 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 self.input.clear();
-                self.mode = Mode::Normal;
+                self.mode = self.input_back;
                 if kind == InputKind::Search {
                     self.search.clear();
                     self.rebuild();
@@ -641,6 +885,7 @@ impl App {
 
     fn open_input(&mut self, kind: InputKind) {
         self.input = if kind == InputKind::Search { self.search.clone() } else { String::new() };
+        self.input_back = if self.mode == Mode::Branches { Mode::Branches } else { Mode::Normal };
         self.mode = Mode::Input(kind);
     }
 
@@ -653,9 +898,16 @@ impl App {
     }
 
     fn submit(&mut self, kind: InputKind) {
-        self.mode = Mode::Normal;
+        self.mode = self.input_back;
         let text = std::mem::take(&mut self.input).trim().to_string();
         match kind {
+            InputKind::Init => self.init_repo(&text),
+            InputKind::Branch if text.is_empty() => self.log(Level::Warn, "empty branch name, nothing created"),
+            InputKind::Branch => {
+                if let Some(repo) = self.branches.as_ref().map(|v| v.repo.clone()) {
+                    self.run_ops(vec![(repo, Op::NewBranch(text))]);
+                }
+            }
             InputKind::Search => {} // already applied while typing
             InputKind::Commit if text.is_empty() => self.log(Level::Warn, "empty commit message, commit cancelled"),
             InputKind::Commit => self.op_selected(Op::Commit(text)),
@@ -736,8 +988,7 @@ impl App {
         }
         let n = jobs.len();
         let prompt = format!("push {n} repositor{}?", if n == 1 { "y" } else { "ies" });
-        self.confirm = Some(Confirm { prompt, jobs });
-        self.mode = Mode::Confirm;
+        self.ask(prompt, jobs);
     }
 
     fn cycle_sort(&mut self) {
