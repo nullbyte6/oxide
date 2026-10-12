@@ -218,7 +218,7 @@ stays plain inverse.
 To recolor the base, change `INK` in [`src/ui.rs`](src/ui.rs) (the default is the terminal's
 own foreground); the accent hues are the `ACCENT`, `GOOD`, `WARN`, `BAD`, `INFO` and `PINK` constants
 next to it. `GAP_X`, `GAP_Y` and `SIDE_PAD` tune the gaps and the inner side padding of panels. The
-banner has a monochrome and a colored version and follows the same switch.
+banner is bold ink, or bold accent color with colors on.
 
 ## Owned vs cloned
 
@@ -280,15 +280,12 @@ when its `.git` is usable, so dangling submodule checkouts and empty `.git` fold
 
 ## Banner
 
-The art above the dashboard comes from [`src/banner.sh`](src/banner.sh). Oxide embeds the
-file when it is built and converts its colors itself; the script is never run. Preview
-it in any terminal with `bash src/banner.sh`.
+The art above the dashboard comes from [`src/banner.txt`](src/banner.txt). Oxide embeds the
+file when it is built and shows it as is, in bold: in the single ink color, or in the accent
+color when colors are on.
 
-- Every art line must be `echo -e "..."`; other lines in the file are ignored.
-- With colors off, the art's colors are flattened to the single ink color: bold and bright colors
-  (`97`, `91`-`96`) render bold, dark ones (`30`, `34`, `90`) dim, the rest normal, and background
-  colors are ignored. With colors on, the art keeps its own foreground and background colors.
-- Edit the script and rebuild to change the banner.
+- Plain text, any art: edit the file and rebuild to change the banner.
+- Trailing spaces and blank lines around the art are ignored; leading spaces are kept.
 - The banner is hidden when the terminal is narrower than the art or has fewer than
   24 rows to spare, so the dashboard always keeps its space.
 
@@ -321,8 +318,8 @@ run in batch mode unless you set `core.sshCommand`, `GIT_SSH_COMMAND` or `GIT_SS
 | `src/palette.rs` | Command palette entries and fuzzy matcher |
 | `src/marks.rs` | Pinned and ignored repositories (config entries and state file) |
 | `src/logger.rs` | Persistent log file |
-| `src/banner.rs` | Turns `src/banner.sh` into monochrome and colored Ratatui lines |
-| `src/banner.sh` | The ASCII banner art shown on top of the dashboard |
+| `src/banner.rs` | Turns `src/banner.txt` into Ratatui lines |
+| `src/banner.txt` | The ASCII banner art shown on top of the dashboard |
 
 ## Versioning
 

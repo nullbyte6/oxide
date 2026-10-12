@@ -40,6 +40,7 @@ All notable changes to Oxide are recorded here, newest version first.
 - Fix scan listing broken repositories: a `.git` that is empty or points to a removed gitdir (dangling submodule) is no longer treated as a repository.
 
 ### Changed
+- Update the banner to a plain `src/banner.txt` shown in bold (accent color with colors on) and remove `src/banner.sh` with its ANSI color converter.
 - Update the command palette so the first `Esc` clears the typed query and a second one closes it.
 - Update the command palette to start empty: the action list only appears once something is typed, and `Enter` does nothing until then.
 - Update `h` and `l` (pane switching in the dashboard) to `h` hiding the key bar and `l` doing nothing; use `←` `→` or `Tab` to switch panes. `h` `l` still pan inside the diff viewer.

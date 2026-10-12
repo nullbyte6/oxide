@@ -86,8 +86,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         let [banner_area, rest] = Layout::vertical([Constraint::Length(banner_h), Constraint::Min(0)]).spacing(GAP_Y).areas(area);
         // Center the art as one block so its lines stay aligned with each other.
         let [_, art, _] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(banner.width), Constraint::Fill(1)]).areas(banner_area);
-        let lines = if app.color { &banner.color_lines } else { &banner.lines };
-        f.render_widget(Paragraph::new(lines.clone()), art);
+        f.render_widget(Paragraph::new(banner.lines.clone()).style(hue(BOLD, ACCENT)), art);
         area = rest;
     }
 
