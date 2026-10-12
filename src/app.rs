@@ -20,6 +20,7 @@ use crate::{
     git::{Branch, Commit, DiffKind, Op},
     logger::{self, Level, Logger},
     marks::{Mark, Marks},
+    palette,
     repo::{Health, Owner, Repo},
     worker::{self, Msg},
 };
@@ -140,6 +141,13 @@ fn run_editor(repo: &Path, target: &Path) -> Result<(), String> {
         .map_err(|e| format!("cannot run {program}: {e}"))
 }
 
+/// State of the command palette.
+#[derive(Default)]
+pub struct Palette {
+    pub query: String,
+    pub state: ListState,
+}
+
 /// The diff viewer: one file of one repository.
 pub struct DiffView {
     pub repo: PathBuf,
@@ -221,6 +229,8 @@ pub enum Mode {
     Input(InputKind),
     /// Waiting for `y` to run `App::confirm`.
     Confirm,
+    /// The command palette is open.
+    Palette,
     /// The diff viewer (`App::diff`) is open.
     Diff,
     /// The commit log (`App::history`) is open.
@@ -251,6 +261,10 @@ pub struct App {
     pub show_hidden: bool,
     /// Accent colors on top of the monochrome design (toggled with `C`).
     pub color: bool,
+    /// The key bar at the bottom is visible (toggled with `h`).
+    pub hints: bool,
+    /// The command palette's query and selection.
+    pub palette: Palette,
     pub search: String,
     /// Text typed into the input line while in `Mode::Input`.
     pub input: String,
@@ -292,7 +306,7 @@ fn step(cur: Option<usize>, len: usize, delta: isize) -> Option<usize> {
 impl App {
     pub fn new(cfg: Config) -> App {
         let (tx, rx) = mpsc::channel();
-        let color = cfg.color;
+        let (color, hints) = (cfg.color, cfg.hints);
         App {
             marks: Marks::load(&cfg),
             cfg: Arc::new(cfg),
@@ -306,6 +320,8 @@ impl App {
             sort: Sort::Name,
             show_hidden: false,
             color,
+            hints,
+            palette: Palette::default(),
             search: String::new(),
             input: String::new(),
             log: Vec::new(),
@@ -528,6 +544,7 @@ impl App {
             Mode::Help => self.mode = Mode::Normal,
             Mode::Input(kind) => self.on_input_key(kind, key),
             Mode::Confirm => self.on_confirm_key(key),
+            Mode::Palette => self.on_palette_key(key),
             Mode::Diff => self.on_diff_key(key),
             Mode::History => self.on_history_key(key),
             Mode::Branches => self.on_branch_key(key),
@@ -548,8 +565,11 @@ impl App {
                 }
             }
             KeyCode::Tab | KeyCode::BackTab => self.toggle_focus(),
-            KeyCode::Right | KeyCode::Char('l') => self.focus = Focus::Files,
-            KeyCode::Left | KeyCode::Char('h') => self.focus = Focus::Repos,
+            KeyCode::Right => self.focus = Focus::Files,
+            KeyCode::Left => self.focus = Focus::Repos,
+            KeyCode::Char('h') => self.hints = !self.hints,
+            KeyCode::Char(':') => self.open_palette(),
+            KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => self.open_palette(),
             KeyCode::Down | KeyCode::Char('j') => self.move_sel(1),
             KeyCode::Up | KeyCode::Char('k') => self.move_sel(-1),
             KeyCode::PageDown => self.move_sel(10),
@@ -833,6 +853,56 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    fn open_palette(&mut self) {
+        self.palette = Palette::default();
+        self.palette.state.select(Some(0));
+        self.mode = Mode::Palette;
+    }
+
+    fn on_palette_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let found = palette::matches(&self.palette.query);
+        let delta = match key.code {
+            KeyCode::Esc => {
+                self.mode = Mode::Normal;
+                return;
+            }
+            KeyCode::Enter => {
+                let pick = self.palette.state.selected().and_then(|i| found.get(i));
+                self.mode = Mode::Normal;
+                if let Some(&(entry, _)) = pick {
+                    // Run the entry exactly as if its key had been pressed on the dashboard.
+                    let code = KeyCode::Char(palette::ENTRIES[entry].code);
+                    self.on_normal_key(KeyEvent::new(code, KeyModifiers::NONE));
+                }
+                return;
+            }
+            KeyCode::Down => 1,
+            KeyCode::Up => -1,
+            KeyCode::Char('n') if ctrl => 1,
+            KeyCode::Char('p') if ctrl => -1,
+            KeyCode::PageDown => 8,
+            KeyCode::PageUp => -8,
+            KeyCode::Backspace => {
+                self.palette.query.pop();
+                self.palette.state.select(Some(0));
+                return;
+            }
+            KeyCode::Char('u') if ctrl => {
+                self.palette.query.clear();
+                self.palette.state.select(Some(0));
+                return;
+            }
+            KeyCode::Char(c) if !ctrl => {
+                self.palette.query.push(c);
+                self.palette.state.select(Some(0));
+                return;
+            }
+            _ => return,
+        };
+        self.palette.state.select(step(self.palette.state.selected(), found.len(), delta));
     }
 
     fn on_confirm_key(&mut self, key: KeyEvent) {

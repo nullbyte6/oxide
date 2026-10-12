@@ -7,6 +7,7 @@ mod diff;
 mod git;
 mod logger;
 mod marks;
+mod palette;
 mod repo;
 mod syntax;
 mod ui;

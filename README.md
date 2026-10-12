@@ -69,7 +69,7 @@ oxide [OPTIONS] [PATH...]
 | --- | --- |
 | `↑` `↓` / `j` `k` | Move selection |
 | `g` / `G` | First / last item |
-| `Tab`, `←` `→`, `h` `l` | Switch between the repository list and the changes list |
+| `Tab`, `←` `→` | Switch between the repository list and the changes list |
 | `f`, `1` `2` `3` `4` | Filter: cycle, or All / Owned / Cloned / Attention |
 | `s` | Sort: name / recent / changes / behind (pinned repositories always come first) |
 | `*` / `x` | Pin / ignore the selected repository |
@@ -95,6 +95,8 @@ oxide [OPTIONS] [PATH...]
 | `o` | Open the repository folder in the file manager (`xdg-open`) |
 | `m` | Merge a branch into the current one (empty input merges the upstream) |
 | `r` / `R` | Reload the selected repository / rescan all roots |
+| `:` / `Ctrl+P` | Command palette: type a few letters of any action (fuzzy matched), `↑` `↓` pick, `Enter` runs it, `Esc` closes |
+| `h` | Hide / show the key bar at the bottom (the row goes back to the panels; prompts still use it) |
 | `?` | Help |
 | `q`, `Ctrl+C` | Quit |
 
@@ -201,6 +203,9 @@ depth = 6
 # accent colors on top of the monochrome design (on or off; off by default when NO_COLOR is set)
 color = on
 
+# start with the key bar at the bottom visible (on) or hidden (off); the h key toggles it
+hints = on
+
 # repositories listed first / hidden: a directory name, or a path (a value with a "/" or a leading "~"
 # also covers every repository below it)
 pin = oxide
@@ -264,6 +269,7 @@ run in batch mode unless you set `core.sshCommand`, `GIT_SSH_COMMAND` or `GIT_SS
 | `src/repo.rs` | Repository model, discovery, owned/cloned classification |
 | `src/worker.rs` | Background scan and operation threads |
 | `src/config.rs` | Config file, roots and owner names |
+| `src/palette.rs` | Command palette entries and fuzzy matcher |
 | `src/marks.rs` | Pinned and ignored repositories (config entries and state file) |
 | `src/logger.rs` | Persistent log file |
 | `src/banner.rs` | Turns `src/banner.sh` into monochrome and colored Ratatui lines |

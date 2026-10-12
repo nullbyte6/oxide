@@ -21,6 +21,7 @@ use crate::{
     diff::{Row, Sign},
     git::{Branch, DiffKind, FileEntry},
     logger::{self, Level},
+    palette,
     repo::{Health, Owner, Repo},
     syntax::Tok,
 };
@@ -76,7 +77,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // Paint the ink color over the whole screen so text without an explicit style uses it too.
     f.render_widget(Block::new().style(PLAIN), f.area());
 
-    let [mut area, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(f.area());
+    let [mut area, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(footer_height(app))]).areas(f.area());
 
     let banner = banner::get();
     let banner_h = banner.lines.len() as u16;
@@ -109,6 +110,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::History => draw_history(f, app),
         Mode::Branches => draw_branches(f, app),
         _ => {}
+    }
+    if app.mode == Mode::Palette {
+        draw_palette(f, app);
     }
     if app.mode == Mode::Help {
         draw_help(f);
@@ -408,6 +412,11 @@ fn draw_log(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(lines).block(pane(format!(" Log ({}) ", logger::zone_name()), false)), area);
 }
 
+/// The bottom row shows the key bar unless `h` hid it. Prompts (text input, confirmations) always need it.
+fn footer_height(app: &App) -> u16 {
+    u16::from(app.hints || matches!(app.mode, Mode::Input(_) | Mode::Confirm))
+}
+
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     if let Mode::Input(kind) = app.mode {
         let prompt = match kind {
@@ -460,27 +469,38 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    // In order of importance; the last three are always kept, the rest only while they fit the width.
     let hints = [
         ("↑↓", "move"),
+        (":", "palette"),
         ("Tab", "pane"),
-        ("f", "filter"),
-        ("s", "sort"),
-        ("d", "diff"),
-        ("/", "search"),
         ("Space", "stage"),
         ("c", "commit"),
+        ("d", "diff"),
+        ("f", "filter"),
+        ("s", "sort"),
+        ("/", "search"),
         ("p", "pull"),
         ("P", "push"),
         ("F", "fetch"),
         ("m", "merge"),
+        ("h", "hide keys"),
         ("?", "help"),
         ("q", "quit"),
     ];
-    let mut spans = Vec::new();
-    for (key, what) in hints {
-        spans.push(Span::styled(format!(" {key} "), hue(KEYCAP, ACCENT)));
-        spans.push(Span::styled(format!(" {what}  "), DIM));
+    let width = |(key, what): &(&str, &str)| key.chars().count() + what.chars().count() + 6;
+    let tail = hints.len() - 3;
+    let reserved: usize = hints[tail..].iter().map(width).sum();
+    let (mut used, mut shown) = (reserved, Vec::new());
+    for (i, hint) in hints[..tail].iter().enumerate() {
+        if used + width(hint) > area.width as usize {
+            break;
+        }
+        used += width(hint);
+        shown.push(i);
     }
+    shown.extend(tail..hints.len());
+    let spans = hint_spans(&shown.iter().map(|&i| hints[i]).collect::<Vec<_>>());
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -537,7 +557,7 @@ fn diff_line(row: &Row, num_w: usize, hscroll: usize) -> Line<'static> {
 
 /// The diff viewer: a full-screen panel over the dashboard.
 fn draw_diff(f: &mut Frame, app: &mut App) {
-    let [area, _] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(f.area());
+    let [area, _] = Layout::vertical([Constraint::Min(0), Constraint::Length(footer_height(app))]).areas(f.area());
     let Some(v) = app.diff.as_mut() else { return };
     let name = v.repo.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     let title = if v.kind == DiffKind::Commit {
@@ -591,7 +611,7 @@ fn hint_spans(hints: &[(&str, &str)]) -> Vec<Span<'static>> {
 
 /// The commit log: a full-screen list, newest commit first.
 fn draw_history(f: &mut Frame, app: &mut App) {
-    let [area, _] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(f.area());
+    let [area, _] = Layout::vertical([Constraint::Min(0), Constraint::Length(footer_height(app))]).areas(f.area());
     let Some(v) = app.history.as_mut() else { return };
     f.render_widget(Clear, area);
     let count = v.commits.as_ref().map_or(String::new(), |c| format!(" ({})", c.len()));
@@ -674,15 +694,61 @@ fn draw_branches(f: &mut Frame, app: &mut App) {
     f.render_stateful_widget(List::new(items).block(block).highlight_style(INVERSE), popup, &mut v.state);
 }
 
+/// The command palette: a query line over the matching actions, with the matched letters emphasised.
+fn draw_palette(f: &mut Frame, app: &mut App) {
+    let found = palette::matches(&app.palette.query);
+    let area = f.area();
+    let w = 70.min(area.width);
+    let h = (found.len().max(1) as u16 + 4).min(area.height.saturating_sub(2).max(5)).min(area.height);
+    let [_, mid, _] = Layout::vertical([Constraint::Percentage(20), Constraint::Length(h), Constraint::Fill(1)]).areas(area);
+    let [_, popup, _] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(w), Constraint::Fill(1)]).areas(mid);
+    f.render_widget(Clear, popup);
+    let block = Block::bordered()
+        .border_type(BorderType::Double)
+        .padding(Padding::horizontal(SIDE_PAD))
+        .border_style(hue(BOLD, ACCENT))
+        .title(Line::from(vec![Span::styled("═╡ ", hue(BOLD, ACCENT)), Span::styled("◆ OXIDE commands", hue(BOLD, ACCENT)), Span::styled(" ╞", hue(BOLD, ACCENT))]));
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+    let [query_row, list_area] = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(inner);
+
+    let query = Line::from(vec![Span::styled("› ", hue(BOLD, ACCENT)), Span::styled(app.palette.query.clone(), BOLD), Span::styled("█", PLAIN)]);
+    f.render_widget(Paragraph::new(query), query_row);
+
+    if found.is_empty() {
+        f.render_widget(Paragraph::new("No command matches.").style(DIM.add_modifier(Modifier::ITALIC)), list_area);
+        return;
+    }
+    let key_w = 6;
+    let name_w = (list_area.width as usize).saturating_sub(key_w + 1);
+    let items: Vec<ListItem> = found
+        .iter()
+        .map(|(i, at)| {
+            let entry = &palette::ENTRIES[*i];
+            let mut spans: Vec<Span> = entry
+                .name
+                .chars()
+                .take(name_w)
+                .enumerate()
+                .map(|(k, c)| Span::styled(c.to_string(), if at.contains(&k) { hue(BOLD, WARN) } else { PLAIN }))
+                .collect();
+            let used = spans.len();
+            spans.push(Span::raw(" ".repeat((name_w + 1).saturating_sub(used))));
+            spans.push(Span::styled(format!("{:>key_w$}", entry.key), hue(DIM, ACCENT)));
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+    f.render_stateful_widget(List::new(items).highlight_style(INVERSE), list_area, &mut app.palette.state);
+}
+
 fn draw_help(f: &mut Frame) {
     let rows: &[(&str, &str)] = &[
         ("↑ ↓ / j k, g G", "move selection, first / last"),
-        ("Tab, ← →, h l", "switch between repositories and changes"),
+        ("Tab, ← →", "switch between repositories and changes"),
         ("f, 1 2 3 4", "filter: all / owned / cloned / attention"),
         ("s", "sort: name / recent / changes / behind"),
         ("/", "search by name, branch or path (Esc clears)"),
-        ("Space, Enter", "stage / unstage the highlighted file"),
-        ("a / u", "stage all / unstage all"),
+        ("Space, a, u", "stage / unstage the file, stage all, unstage all"),
         ("c", "commit staged changes"),
         ("p / P", "pull (fast-forward only) / push (new branches with -u)"),
         ("F / A", "fetch selected repository / every one in view"),
@@ -694,10 +760,11 @@ fn draw_help(f: &mut Frame) {
         ("e / t / o", "yazi on the file or repository / shell / file manager"),
         ("* / x / H", "pin / ignore the repository / show ignored ones"),
         ("r / R", "reload selected repository / rescan all roots"),
-        ("?  q, Ctrl+C", "this help (any key closes it) / quit"),
-        ("↑n ↓n", "commits ahead / behind upstream"),
+        (": / Ctrl+P", "command palette: type to find any action, Enter runs it"),
+        ("h / C", "hide or show this key bar / toggle colors"),
+        ("? / q", "this help (any key closes it) / quit"),
+        ("↑n ↓n ★ ⊘", "ahead · behind · pinned · ignored"),
         ("+ ~ ? ! $", "staged · modified · untracked · conflicts · stashes"),
-        ("★ ⊘", "pinned · ignored"),
     ];
     let lines: Vec<Line> = rows
         .iter()
