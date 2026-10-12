@@ -1,11 +1,13 @@
 //! Runtime configuration: scan roots, owner names and paths used by Oxide.
 //!
-//! The optional config file (`$XDG_CONFIG_HOME/oxide/config`, falling back to
-//! `~/.config/oxide/config`) is a list of `key = value` lines; `#` starts a comment.
-//! Supported keys: `root` (repeatable), `owner` (repeatable), `depth`, `color`, `hints`, `logs` and `ci` (`on` / `off`), `email` (repeatable), `autofetch` (`off`, or an
-//! interval such as `10m`), `clone_dir`, and the repeatable `pin` and
-//! `ignore` (a repository directory name, or a path when the value contains `/` or starts with `~`).
+//! The optional config file (`$XDG_CONFIG_HOME/oxide/config.lua`, falling back to
+//! `~/.config/oxide/config.lua`) is a Lua script. Oxide runs it and reads the table it returns, or, when it
+//! returns nothing, the global variables it sets. Keys: `root`, `owner`, `email`, `pin` and `ignore` (a string
+//! or a list of strings), `depth` (number), `color`, `hints`, `logs` and `ci` (booleans), `autofetch` (`false`,
+//! or an interval such as `"10m"`; a bare number counts minutes) and `clone_dir` (string). `pin` / `ignore` take
+//! a repository directory name, or a path when the value contains `/` or starts with `~`.
 
+use mlua::{Lua, Table, Value};
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -17,23 +19,25 @@ use crate::git;
 const DEFAULT_DEPTH: usize = 6;
 
 pub struct Config {
+    /// Why `config.lua` could not be used (a syntax or runtime error); the defaults apply then.
+    pub error: Option<String>,
     /// Directories scanned for repositories.
     pub roots: Vec<PathBuf>,
     /// Lowercase account names whose repositories count as "owned".
     pub owners: Vec<String>,
     /// Maximum scan depth below each root.
     pub depth: usize,
-    /// Whether accent colors are drawn (`color = on|off`; off by default when `NO_COLOR` is set).
+    /// Whether accent colors are drawn (`color`; off by default when `NO_COLOR` is set).
     pub color: bool,
-    /// Whether the key bar at the bottom starts visible (`hints = on|off`); `h` toggles it.
+    /// Whether the key bar at the bottom starts visible (`hints`); `h` toggles it.
     pub hints: bool,
-    /// Whether the log panel starts visible (`logs = on|off`); `l` toggles it.
+    /// Whether the log panel starts visible (`logs`); `l` toggles it.
     pub logs: bool,
     /// Lowercase e-mail addresses commits are expected to be made with (`email`); the global `user.email` when empty.
     pub emails: Vec<String>,
-    /// Seconds between automatic fetches of every repository (`autofetch = 10m`); 0 turns it off.
+    /// Seconds between automatic fetches of every repository (`autofetch = "10m"`); 0 turns it off.
     pub autofetch: u64,
-    /// Whether the CI status of GitHub repositories is loaded in the background (`ci = on|off`); `w` always refreshes it.
+    /// Whether the CI status of GitHub repositories is loaded in the background (`ci`); `w` always refreshes it.
     pub ci: bool,
     /// Folder that GitHub repositories are cloned into by default (`clone_dir`); the home directory otherwise.
     pub clone_dir: PathBuf,
@@ -59,7 +63,7 @@ fn xdg(var: &str, fallback: &str) -> PathBuf {
 }
 
 pub fn config_file() -> PathBuf {
-    xdg("XDG_CONFIG_HOME", ".config").join("config")
+    xdg("XDG_CONFIG_HOME", ".config").join("config.lua")
 }
 
 /// Directory that holds the persistent log file.
@@ -121,6 +125,27 @@ fn unescape_mount(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// Runs the config script. Its returned table is the configuration; a script that returns nothing
+/// configures through global variables. The `Lua` state is returned too, since the table lives in it.
+fn read_table(text: &str) -> mlua::Result<(Lua, Table)> {
+    let lua = Lua::new();
+    let ret = lua.load(text).set_name("config.lua").call::<Value>(())?;
+    let table = match ret {
+        Value::Table(t) => t,
+        _ => lua.globals(),
+    };
+    Ok((lua, table))
+}
+
+/// A key holding one string or a list of strings, as a list (anything else gives an empty one).
+fn strings(conf: &Table, key: &str) -> Vec<String> {
+    match conf.get::<Value>(key) {
+        Ok(Value::String(s)) => vec![s.to_string_lossy()],
+        Ok(Value::Table(list)) => list.sequence_values::<String>().flatten().collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// Seconds in an interval such as `30s`, `10m` or `1h`; a bare number counts minutes and `off` means 0.
 fn parse_interval(val: &str) -> Option<u64> {
     let val = val.trim().to_lowercase();
@@ -152,42 +177,44 @@ impl Config {
         let mut ci = true;
         let mut color = env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
 
+        // A missing file is fine; a file that fails to run is reported (the app logs it) and defaults apply.
+        let mut error = None;
         if let Ok(text) = fs::read_to_string(config_file()) {
-            for line in text.lines() {
-                let line = line.trim();
-                let Some((key, val)) = line.split_once('=') else { continue };
-                let (key, val) = (key.trim(), val.trim());
-                match key {
-                    "root" => roots.push(expand(val)),
-                    "owner" => owners.push(val.to_lowercase()),
-                    "depth" => depth = val.parse().unwrap_or(depth),
-                    "color" => match val.to_lowercase().as_str() {
-                        "on" | "true" | "yes" | "1" => color = true,
-                        "off" | "false" | "no" | "0" => color = false,
+            match read_table(&text) {
+                Ok((lua, conf)) => {
+                    roots.extend(strings(&conf, "root").iter().map(|r| expand(r)));
+                    owners.extend(strings(&conf, "owner").iter().map(|o| o.to_lowercase()));
+                    emails.extend(strings(&conf, "email").iter().map(|e| e.to_lowercase()));
+                    pins = strings(&conf, "pin");
+                    ignores = strings(&conf, "ignore");
+                    match conf.get::<Value>("depth") {
+                        Ok(Value::Nil) => {}
+                        Ok(Value::Integer(n)) if n >= 0 => depth = n as usize,
+                        _ => error = Some("depth: expected a whole number".to_string()),
+                    }
+                    for (key, slot) in [("color", &mut color), ("hints", &mut hints), ("logs", &mut logs), ("ci", &mut ci)] {
+                        match conf.get::<Value>(key) {
+                            Ok(Value::Nil) => {}
+                            Ok(Value::Boolean(b)) => *slot = b,
+                            _ => error = Some(format!("{key}: expected true or false")),
+                        }
+                    }
+                    if let Ok(dir) = conf.get::<String>("clone_dir") {
+                        clone_dir = expand(&dir);
+                    }
+                    match conf.get::<Value>("autofetch") {
+                        Ok(Value::Boolean(false)) => autofetch = 0,
+                        Ok(Value::Integer(n)) => autofetch = u64::try_from(n).unwrap_or(0) * 60,
+                        Ok(Value::Number(n)) => autofetch = (n.max(0.0) * 60.0) as u64,
+                        Ok(Value::String(v)) => match parse_interval(&v.to_string_lossy()) {
+                            Some(secs) => autofetch = secs,
+                            None => error = Some("autofetch: expected false or an interval like \"30s\", \"10m\", \"1h\"".to_string()),
+                        },
                         _ => {}
-                    },
-                    "hints" => match val.to_lowercase().as_str() {
-                        "on" | "true" | "yes" | "1" => hints = true,
-                        "off" | "false" | "no" | "0" => hints = false,
-                        _ => {}
-                    },
-                    "clone_dir" => clone_dir = expand(val),
-                    "email" => emails.push(val.to_lowercase()),
-                    "autofetch" => autofetch = parse_interval(val).unwrap_or(autofetch),
-                    "ci" => match val.to_lowercase().as_str() {
-                        "on" | "true" | "yes" | "1" => ci = true,
-                        "off" | "false" | "no" | "0" => ci = false,
-                        _ => {}
-                    },
-                    "logs" => match val.to_lowercase().as_str() {
-                        "on" | "true" | "yes" | "1" => logs = true,
-                        "off" | "false" | "no" | "0" => logs = false,
-                        _ => {}
-                    },
-                    "pin" => pins.push(val.to_string()),
-                    "ignore" => ignores.push(val.to_string()),
-                    _ => {} // comments, blank lines and unknown keys
+                    }
+                    drop(lua);
                 }
+                Err(e) => error = Some(e.to_string()),
             }
         }
 
@@ -208,6 +235,6 @@ impl Config {
         owners.sort();
         owners.dedup();
 
-        Config { roots, owners, depth, color, hints, logs, emails, autofetch, ci, clone_dir, pins, ignores, cross_devices: explicit }
+        Config { error, roots, owners, depth, color, hints, logs, emails, autofetch, ci, clone_dir, pins, ignores, cross_devices: explicit }
     }
 }

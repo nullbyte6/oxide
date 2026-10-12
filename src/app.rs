@@ -572,6 +572,9 @@ impl App {
             tx,
             rx,
         };
+        if let Some(e) = app.cfg.error.clone() {
+            app.log(Level::Error, format!("config.lua ignored: {e}"));
+        }
         if let Err(e) = watch {
             app.log(Level::Warn, format!("file watching is off: {e}"));
         }

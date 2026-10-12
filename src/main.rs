@@ -37,7 +37,7 @@ USAGE:
     oxide [OPTIONS] [PATH...]
 
 ARGS:
-    PATH...        Directories to scan (default: 'root' entries of the config file, else every mounted drive)
+    PATH...        Directories to scan (default: 'root' of config.lua, else every mounted drive)
 
 OPTIONS:
         --list     Print the repository table to stdout and exit (no TUI)
@@ -45,7 +45,7 @@ OPTIONS:
     -V, --version  Show the version
 
 FILES:
-    ~/.config/oxide/config       'root', 'owner', 'depth', 'autofetch', 'ci', 'pin' and 'ignore' entries (key = value)
+    ~/.config/oxide/config.lua   Lua script: root, owner, email, depth, color, hints, logs, ci, autofetch, clone_dir, pin, ignore
     ~/.local/state/oxide/oxide.log
     ~/.local/state/oxide/marks   repositories pinned or ignored with the * and x keys
 ";
@@ -74,6 +74,9 @@ fn main() -> ExitCode {
     let cfg = Config::load(paths);
 
     if list {
+        if let Some(e) = &cfg.error {
+            eprintln!("oxide: config.lua ignored: {e}");
+        }
         print_list(cfg);
         return ExitCode::SUCCESS;
     }

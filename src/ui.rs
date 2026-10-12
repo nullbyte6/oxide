@@ -3,7 +3,7 @@
 //! The design is monochrome at its core: one ink color on the terminal's own background. Hierarchy
 //! and state come from bold, dim and inverse text, thick borders and symbols. Colors are an optional
 //! layer on top (`hue`): every colored span keeps the weight and symbol it has without color, so
-//! turning colors off (`C`, `color = off` or `NO_COLOR`) leaves the monochrome look unchanged.
+//! turning colors off (`C`, `color = false` in config.lua or `NO_COLOR`) leaves the monochrome look unchanged.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 

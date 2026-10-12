@@ -1,6 +1,6 @@
 //! Pinned and ignored repositories.
 //!
-//! Two sources are combined: `pin` / `ignore` entries of the config file (read-only for Oxide) and
+//! Two sources are combined: `pin` / `ignore` entries of `config.lua` (read-only for Oxide) and
 //! a state file, `<state dir>/marks`, that the `*` and `x` keys edit at runtime. Each line of the
 //! state file is `pin <path>` or `ignore <path>`.
 
@@ -51,7 +51,7 @@ impl Marks {
         Marks { cfg_pins: cfg.pins.clone(), cfg_ignores: cfg.ignores.clone(), pins, ignores }
     }
 
-    /// True when `path` is marked by the config file or by the state file.
+    /// True when `path` is marked by `config.lua` or by the state file.
     pub fn has(&self, mark: Mark, path: &Path) -> bool {
         let (patterns, saved) = match mark {
             Mark::Pin => (&self.cfg_pins, &self.pins),
@@ -61,7 +61,7 @@ impl Marks {
     }
 
     /// Adds the mark to `path`, or removes it when the state file already holds it. Returns whether
-    /// the repository is marked afterwards. A mark that comes from the config file cannot be removed here.
+    /// the repository is marked afterwards. A mark that comes from `config.lua` cannot be removed here.
     pub fn toggle(&mut self, mark: Mark, path: &Path) -> Result<bool, String> {
         let from_config = match mark {
             Mark::Pin => &self.cfg_pins,
@@ -76,7 +76,7 @@ impl Marks {
         if let Some(i) = saved.iter().position(|p| p == path) {
             saved.remove(i);
         } else if from_config {
-            return Err("set by an entry in the config file, remove it there".to_string());
+            return Err("set in config.lua, remove it there".to_string());
         } else {
             saved.push(path.to_path_buf());
         }
