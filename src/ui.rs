@@ -15,7 +15,7 @@ use crate::{
     app::{App, Filter, Focus, InputKind, Mode},
     banner,
     git::FileEntry,
-    logger::Level,
+    logger::{self, Level},
     repo::{Health, Owner, Repo},
 };
 
@@ -347,7 +347,7 @@ fn draw_log(f: &mut Frame, app: &App, area: Rect) {
             ])
         })
         .collect();
-    f.render_widget(Paragraph::new(lines).block(pane(" Log (UTC) ".into(), false)), area);
+    f.render_widget(Paragraph::new(lines).block(pane(format!(" Log ({}) ", logger::zone_name()), false)), area);
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {

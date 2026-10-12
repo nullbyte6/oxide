@@ -1,9 +1,11 @@
-//! Persistent log file (`<state dir>/oxide.log`) with UTC timestamps.
+//! Persistent log file (`<state dir>/oxide.log`) with local-time timestamps.
 
 use std::{
     fs::{self, File, OpenOptions},
     io::Write,
     path::PathBuf,
+    process::Command,
+    sync::OnceLock,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -57,21 +59,61 @@ impl Logger {
     }
 }
 
-fn now_secs() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
+/// The local timezone: offset from UTC in seconds and its abbreviation (e.g. `CEST`).
+struct Zone {
+    offset: i64,
+    name: String,
 }
 
-/// `HH:MM:SS` (UTC) for the in-app log panel.
-pub fn clock() -> String {
-    let s = now_secs().rem_euclid(86_400);
+/// Local timezone, read once from the system's `date` (it honors `TZ` and `/etc/localtime`).
+/// It is fixed for the whole run, so a daylight-saving change while Oxide is open is not
+/// picked up until the next start. Falls back to UTC when `date` is unavailable.
+fn zone() -> &'static Zone {
+    static ZONE: OnceLock<Zone> = OnceLock::new();
+    ZONE.get_or_init(|| {
+        let utc = || Zone { offset: 0, name: "UTC".to_string() };
+        let Ok(out) = Command::new("date").arg("+%z %Z").output() else { return utc() };
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut parts = text.split_whitespace();
+        let (Some(off), Some(name)) = (parts.next(), parts.next()) else { return utc() };
+        // `%z` looks like +0200 or -0530.
+        let (Some(sign), Ok(h), Ok(m)) = (off.get(..1), off.get(1..3).unwrap_or("").parse::<i64>(), off.get(3..5).unwrap_or("").parse::<i64>()) else {
+            return utc();
+        };
+        let secs = h * 3600 + m * 60;
+        Zone { offset: if sign == "-" { -secs } else { secs }, name: name.to_string() }
+    })
+}
+
+/// Abbreviation of the local timezone, for panel titles.
+pub fn zone_name() -> &'static str {
+    &zone().name
+}
+
+/// Seconds since the Unix epoch, shifted into local time.
+fn local_secs() -> i64 {
+    let utc = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+    utc + zone().offset
+}
+
+/// `HH:MM:SS` of a local-time second count.
+fn hms(secs: i64) -> String {
+    let s = secs.rem_euclid(86_400);
     format!("{:02}:{:02}:{:02}", s / 3600, s % 3600 / 60, s % 60)
 }
 
-/// ISO-8601 UTC timestamp, e.g. `2026-10-12T15:45:00Z`.
+/// `HH:MM:SS` in local time for the in-app log panel.
+pub fn clock() -> String {
+    hms(local_secs())
+}
+
+/// ISO-8601 local timestamp with its UTC offset, e.g. `2026-10-12T17:45:00+02:00`.
 fn timestamp() -> String {
-    let secs = now_secs();
-    let (y, m, d) = civil_from_days(secs.div_euclid(86_400));
-    format!("{y:04}-{m:02}-{d:02}T{}Z", clock())
+    let now = local_secs(); // read once so the date and the time always agree
+    let (y, m, d) = civil_from_days(now.div_euclid(86_400));
+    let off = zone().offset;
+    let sign = if off < 0 { '-' } else { '+' };
+    format!("{y:04}-{m:02}-{d:02}T{}{sign}{:02}:{:02}", hms(now), off.abs() / 3600, off.abs() % 3600 / 60)
 }
 
 /// Converts days since 1970-01-01 to a (year, month, day) civil date.

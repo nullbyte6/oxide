@@ -158,7 +158,7 @@ it in any terminal with `bash src/banner.sh`.
 ## Logs
 
 Oxide writes every action to `~/.local/state/oxide/oxide.log` (or
-`$XDG_STATE_HOME/oxide/oxide.log`), with UTC timestamps. The file rotates to
+`$XDG_STATE_HOME/oxide/oxide.log`), with local-time timestamps that include the UTC offset. The timezone is read once at start-up, so a daylight-saving change while Oxide is open shows after a restart. The file rotates to
 `oxide.log.1` at 1 MiB. The last lines are also shown in the Log panel.
 
 ## Remotes and credentials
