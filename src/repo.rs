@@ -43,6 +43,14 @@ pub struct Repo {
     pub remote: Option<String>,
     pub owner: Owner,
     pub last_commit: String,
+    /// Unix time of the last commit; 0 when there is none.
+    pub commit_time: i64,
+    /// Number of entries in `git stash list`.
+    pub stashes: u32,
+    /// Set by the app from the pin marks; pinned repositories are listed first.
+    pub pinned: bool,
+    /// Set by the app from the ignore marks; ignored repositories are hidden unless asked for.
+    pub ignored: bool,
     /// Set when `git status` failed; the repository is then shown as broken.
     pub error: Option<String>,
 }
@@ -59,6 +67,17 @@ impl Repo {
     }
     pub fn conflicts(&self) -> usize {
         self.files.iter().filter(|f| f.conflict()).count()
+    }
+
+    /// Sort weight for "most changed first": conflicts, then errors, then the number of changed files.
+    pub fn activity(&self) -> usize {
+        let rank = match self.health() {
+            Health::Conflict => 3,
+            Health::Error => 2,
+            Health::Dirty => 1,
+            Health::Clean => 0,
+        };
+        rank * 1_000_000 + self.files.len()
     }
 
     pub fn health(&self) -> Health {
@@ -139,6 +158,10 @@ pub fn load(path: &Path, cfg: &Config) -> Repo {
         owner: classify(remote.as_deref(), cfg),
         remote,
         last_commit: String::new(),
+        commit_time: 0,
+        stashes: 0,
+        pinned: false,
+        ignored: false,
         error: None,
     };
     match git::status(path) {
@@ -148,7 +171,8 @@ pub fn load(path: &Path, cfg: &Config) -> Repo {
             repo.ahead = st.ahead;
             repo.behind = st.behind;
             repo.files = st.files;
-            repo.last_commit = git::last_commit(path);
+            repo.stashes = st.stashes;
+            (repo.last_commit, repo.commit_time) = git::last_commit(path);
         }
         Err(e) => repo.error = Some(e),
     }

@@ -115,9 +115,9 @@ fn bar(done: usize, total: usize, width: usize) -> String {
 }
 
 fn draw_header(f: &mut Frame, app: &App, area: Rect) {
-    let dirty = app.repos.iter().filter(|r| r.health() != Health::Clean).count();
-    let ahead = app.repos.iter().filter(|r| r.ahead > 0).count();
-    let behind = app.repos.iter().filter(|r| r.behind > 0).count();
+    let dirty = app.listed().filter(|r| r.health() != Health::Clean).count();
+    let ahead = app.listed().filter(|r| r.ahead > 0).count();
+    let behind = app.listed().filter(|r| r.behind > 0).count();
     let spin = SPINNER[app.tick % SPINNER.len()];
 
     // Right side, left to right: search, running operations, scan progress, totals.
@@ -133,7 +133,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         Some((done, total)) => right.push(Span::styled(format!(" {spin} scanning {} {done}/{total} ", bar(done, total, 10)), BOLD)),
         None => {}
     }
-    right.push(Span::styled(format!(" {} repos · {dirty} dirty · {ahead} ahead · {behind} behind ", app.repos.len()), DIM));
+    right.push(Span::styled(format!(" {} repos · {dirty} dirty · {ahead} ahead · {behind} behind ", app.listed().count()), DIM));
 
     let block = Block::bordered()
         .padding(Padding::horizontal(SIDE_PAD))
@@ -155,6 +155,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
                 Filter::All => "All",
                 Filter::Owned => "Owned",
                 Filter::Cloned => "Cloned",
+                Filter::Attention => "Attention",
             };
             format!(" {name} {} ", app.count(flt))
         })
@@ -169,8 +170,17 @@ fn repo_row(r: &Repo, busy: Option<&str>, tick: usize, name_w: usize) -> ListIte
         Owner::Owned => ("own  ", PLAIN),
         Owner::Cloned => ("clone", DIM),
     };
+    // The two columns left of the name are breathing room inside the selection bar; they also hold
+    // the pin and ignore marks.
+    let mark = if r.pinned {
+        "★ "
+    } else if r.ignored {
+        "⊘ "
+    } else {
+        "  "
+    };
     let mut spans = vec![
-        Span::raw("  "), // left breathing room inside the selection bar
+        Span::styled(mark, if r.ignored { DIM } else { BOLD }),
         Span::styled(fit(&r.name, name_w), BOLD),
         Span::raw(" "),
         Span::styled(badge, badge_style),
@@ -190,7 +200,7 @@ fn repo_row(r: &Repo, busy: Option<&str>, tick: usize, name_w: usize) -> ListIte
     if r.error.is_some() {
         spans.push(Span::styled("error", BOLD));
     }
-    for (n, sym) in [(r.conflicts(), "!"), (r.staged(), "+"), (r.unstaged(), "~"), (r.untracked(), "?")] {
+    for (n, sym) in [(r.conflicts(), "!"), (r.staged(), "+"), (r.unstaged(), "~"), (r.untracked(), "?"), (r.stashes as usize, "$")] {
         if n > 0 {
             spans.push(Span::styled(format!("{sym}{n} "), PLAIN));
         }
@@ -199,12 +209,9 @@ fn repo_row(r: &Repo, busy: Option<&str>, tick: usize, name_w: usize) -> ListIte
 }
 
 fn draw_repos(f: &mut Frame, app: &mut App, area: Rect) {
-    let filter = match app.filter {
-        Filter::All => "all",
-        Filter::Owned => "owned",
-        Filter::Cloned => "cloned",
-    };
-    let block = pane(format!(" Repositories · {filter} ({}) ", app.visible.len()), app.focus == Focus::Repos);
+    let hidden = if app.show_hidden { " · +ignored" } else { "" };
+    let title = format!(" Repositories · {} ({}) · by {}{hidden} ", app.filter.name(), app.visible.len(), app.sort.name());
+    let block = pane(title, app.focus == Focus::Repos);
 
     if app.visible.is_empty() {
         let msg = if app.scan.is_some() { "Scanning for repositories…" } else { "No repositories match. Press R to rescan." };
@@ -213,7 +220,7 @@ fn draw_repos(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     // Give the name column the spare width, between 12 and 28 characters.
-    let name_w = (area.width as usize).saturating_sub(48).clamp(12, 28);
+    let name_w = (area.width as usize).saturating_sub(52).clamp(12, 28);
     let items: Vec<ListItem> = app
         .visible
         .iter()
@@ -291,6 +298,8 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
             count_span(r.unstaged(), "", " modified"),
             Span::styled(" · ", DIM),
             count_span(r.untracked(), "", " untracked"),
+            Span::styled(" · ", DIM),
+            count_span(r.stashes as usize, "", " stashed"),
         ]),
         commit_line(&r.last_commit, label("commit")),
     ];
@@ -352,10 +361,18 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    if app.mode == Mode::Confirm {
+        let prompt = app.confirm.as_ref().map_or("", |c| c.prompt.as_str());
+        let line = Line::from(vec![Span::styled(format!(" {prompt} "), BOLD), Span::styled("y", KEYCAP), Span::styled(" yes   any other key cancels", DIM)]);
+        f.render_widget(Paragraph::new(line), area);
+        return;
+    }
+
     let hints = [
         ("↑↓", "move"),
         ("Tab", "pane"),
         ("f", "filter"),
+        ("s", "sort"),
         ("/", "search"),
         ("Space", "stage"),
         ("c", "commit"),
@@ -375,27 +392,28 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_help(f: &mut Frame) {
-    let rows: [(&str, &str); 21] = [
-        ("↑ ↓ / j k", "move selection"),
-        ("g / G", "first / last"),
+    let rows: &[(&str, &str)] = &[
+        ("↑ ↓ / j k, g G", "move selection, first / last"),
         ("Tab, ← →, h l", "switch between repositories and changes"),
-        ("f, 1 2 3", "filter: all / owned / cloned"),
+        ("f, 1 2 3 4", "filter: all / owned / cloned / attention"),
+        ("s", "sort: name / recent / changes / behind"),
         ("/", "search by name, branch or path (Esc clears)"),
         ("Space, Enter", "stage / unstage the highlighted file"),
         ("a / u", "stage all / unstage all"),
         ("c", "commit staged changes"),
-        ("p", "pull (fast-forward only)"),
-        ("P", "push (publishes new branches with -u)"),
-        ("F", "fetch selected repository"),
-        ("A", "fetch every repository in the current view"),
+        ("p / P", "pull (fast-forward only) / push (new branches with -u)"),
+        ("F / A", "fetch selected repository / every one in view"),
+        ("L / U", "pull every behind / push every ahead repository in view"),
         ("m", "merge a branch (empty = upstream)"),
-        ("r", "reload selected repository"),
-        ("R", "rescan all roots"),
-        ("?", "this help"),
-        ("q, Ctrl+C", "quit"),
+        ("z / Z", "stash all changes / pop the latest stash"),
+        ("e / t / o", "editor on the file or repository / shell / file manager"),
+        ("* / x / H", "pin / ignore the repository / show ignored ones"),
+        ("r / R", "reload selected repository / rescan all roots"),
+        ("?  q, Ctrl+C", "this help / quit"),
         ("", ""),
         ("↑n ↓n", "commits ahead / behind upstream"),
-        ("+ ~ ? !", "staged · modified · untracked · conflicts"),
+        ("+ ~ ? ! $", "staged · modified · untracked · conflicts · stashes"),
+        ("★ ⊘", "pinned · ignored"),
         ("", "Any key closes this window."),
     ];
     let lines: Vec<Line> = rows

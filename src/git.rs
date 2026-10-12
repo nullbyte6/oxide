@@ -38,6 +38,8 @@ pub struct Status {
     pub upstream: Option<String>,
     pub ahead: u32,
     pub behind: u32,
+    /// Number of stash entries (the `# stash` header, git 2.35 or newer).
+    pub stashes: u32,
     pub files: Vec<FileEntry>,
 }
 
@@ -54,6 +56,9 @@ pub enum Op {
     StageAll,
     UnstageAll,
     Commit(String),
+    /// Stash tracked and untracked changes.
+    Stash,
+    StashPop,
 }
 
 impl Op {
@@ -68,6 +73,8 @@ impl Op {
             Op::StageAll => "stage all",
             Op::UnstageAll => "unstage all",
             Op::Commit(_) => "commit",
+            Op::Stash => "stash",
+            Op::StashPop => "stash pop",
         }
     }
 }
@@ -142,16 +149,19 @@ pub fn remote_url(repo: &Path) -> Option<String> {
     Some(url.trim().to_string()).filter(|u| !u.is_empty())
 }
 
-/// `<hash> <subject> (<relative date>)` of HEAD.
-pub fn last_commit(repo: &Path) -> String {
-    run(repo, &["log", "-1", "--format=%h %s (%cr)"])
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|_| "no commits yet".to_string())
+/// `<hash> <subject> (<relative date>)` of HEAD and its commit time as a Unix timestamp.
+pub fn last_commit(repo: &Path) -> (String, i64) {
+    // %x1f (unit separator) splits the text from the timestamp, since a subject may contain anything else.
+    let out = run(repo, &["log", "-1", "--format=%h %s (%cr)%x1f%ct"]).unwrap_or_default();
+    match out.trim().split_once('\x1f') {
+        Some((text, time)) => (text.to_string(), time.trim().parse().unwrap_or(0)),
+        None => ("no commits yet".to_string(), 0),
+    }
 }
 
 pub fn status(repo: &Path) -> Result<Status, String> {
-    let out = run(repo, &["status", "--porcelain=v2", "--branch", "-z"])?;
-    let mut st = Status { branch: String::new(), upstream: None, ahead: 0, behind: 0, files: Vec::new() };
+    let out = run(repo, &["status", "--porcelain=v2", "--branch", "--show-stash", "-z"])?;
+    let mut st = Status { branch: String::new(), upstream: None, ahead: 0, behind: 0, stashes: 0, files: Vec::new() };
 
     // With -z every record is NUL-terminated and paths are not quoted.
     let mut records = out.split('\0');
@@ -161,6 +171,8 @@ pub fn status(repo: &Path) -> Result<Status, String> {
                 st.branch = b.to_string();
             } else if let Some(u) = h.strip_prefix("branch.upstream ") {
                 st.upstream = Some(u.to_string());
+            } else if let Some(n) = h.strip_prefix("stash ") {
+                st.stashes = n.trim().parse().unwrap_or(0);
             } else if let Some(ab) = h.strip_prefix("branch.ab ") {
                 let mut it = ab.split(' ');
                 st.ahead = it.next().and_then(|a| a.trim_start_matches('+').parse().ok()).unwrap_or(0);
@@ -219,6 +231,8 @@ pub fn perform(repo: &Path, op: &Op) -> Result<String, String> {
         Op::StageAll => run_all(repo, &["add", "-A"]),
         Op::UnstageAll => run_all(repo, &["reset", "-q"]),
         Op::Commit(msg) => run_all(repo, &["commit", "-m", msg]),
+        Op::Stash => run_all(repo, &["stash", "push", "--include-untracked", "-m", "oxide stash"]),
+        Op::StashPop => run_all(repo, &["stash", "pop"]),
     }
 }
 

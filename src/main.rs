@@ -5,6 +5,7 @@ mod banner;
 mod config;
 mod git;
 mod logger;
+mod marks;
 mod repo;
 mod ui;
 mod worker;
@@ -39,8 +40,9 @@ OPTIONS:
     -V, --version  Show the version
 
 FILES:
-    ~/.config/oxide/config       'root', 'owner' and 'depth' entries (key = value)
+    ~/.config/oxide/config       'root', 'owner', 'depth', 'pin' and 'ignore' entries (key = value)
     ~/.local/state/oxide/oxide.log
+    ~/.local/state/oxide/marks   repositories pinned or ignored with the * and x keys
 ";
 
 fn main() -> ExitCode {
@@ -94,6 +96,13 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
             && key.kind == KeyEventKind::Press
         {
             app.on_key(key);
+        }
+        // An editor or shell needs the whole terminal: leave the dashboard, run it, come back.
+        if let Some(launch) = app.launch.take() {
+            ratatui::restore();
+            let result = launch.run();
+            *terminal = ratatui::try_init()?;
+            app.launch_done(launch.repo(), result);
         }
         app.drain();
         app.tick = app.tick.wrapping_add(1);

@@ -14,6 +14,12 @@ All notable changes to Oxide are recorded here, newest version first.
 - Add LICENSE (MIT) and README with usage, keys and configuration.
 - Add ASCII banner on top of the dashboard, rendered from `src/banner.sh`: its ANSI colors are converted to Ratatui styles and it is hidden on small terminals.
 
+- Add *Attention* filter (key `4`) for repositories that are dirty, ahead, behind or broken, and a `s` key that sorts the list by name, last commit, changes or commits behind; the order is shown in the panel title.
+- Add pinned and ignored repositories: `pin` / `ignore` config entries, `*` / `x` keys that save to a `marks` state file, and `H` to show ignored ones.
+- Add stash and stash pop (`z` / `Z`) with a `$n` stash counter on rows and in the details pane.
+- Add `e` / `t` / `o` keys to open the selected file or repository in `$VISUAL` / `$EDITOR`, a shell or the file manager.
+- Add bulk pull (`L`) and bulk push (`U`, asks for confirmation) for the repositories in view.
+
 ### Fixed
 - Fix leftover status circles on repository rows from the old colored design, leaving two columns of left padding in their place; dirty, conflict and error state remains visible through the row counters and labels.
 - Fix log timestamps to use the local timezone instead of UTC, in the log file (with UTC offset) and in the Log panel title.

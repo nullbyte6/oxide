@@ -2,7 +2,8 @@
 //!
 //! The optional config file (`$XDG_CONFIG_HOME/oxide/config`, falling back to
 //! `~/.config/oxide/config`) is a list of `key = value` lines; `#` starts a comment.
-//! Supported keys: `root` (repeatable), `owner` (repeatable) and `depth`.
+//! Supported keys: `root` (repeatable), `owner` (repeatable), `depth`, and the repeatable `pin` and
+//! `ignore` (a repository directory name, or a path when the value contains `/` or starts with `~`).
 
 use std::{
     env, fs,
@@ -21,6 +22,10 @@ pub struct Config {
     pub owners: Vec<String>,
     /// Maximum scan depth below each root.
     pub depth: usize,
+    /// Repositories always listed first (directory names or paths from `pin` entries).
+    pub pins: Vec<String>,
+    /// Repositories hidden from the list (directory names or paths from `ignore` entries).
+    pub ignores: Vec<String>,
     /// False for the automatic whole-machine roots: each mounted drive is its own root, so a scan
     /// never steps onto another filesystem. Explicit roots (CLI or config) may cross mount points.
     pub cross_devices: bool,
@@ -107,6 +112,7 @@ impl Config {
         let mut roots = Vec::new();
         let mut owners = Vec::new();
         let mut depth = DEFAULT_DEPTH;
+        let (mut pins, mut ignores) = (Vec::new(), Vec::new());
 
         if let Ok(text) = fs::read_to_string(config_file()) {
             for line in text.lines() {
@@ -117,6 +123,8 @@ impl Config {
                     "root" => roots.push(expand(val)),
                     "owner" => owners.push(val.to_lowercase()),
                     "depth" => depth = val.parse().unwrap_or(depth),
+                    "pin" => pins.push(val.to_string()),
+                    "ignore" => ignores.push(val.to_string()),
                     _ => {} // comments, blank lines and unknown keys
                 }
             }
@@ -139,6 +147,6 @@ impl Config {
         owners.sort();
         owners.dedup();
 
-        Config { roots, owners, depth, cross_devices: explicit }
+        Config { roots, owners, depth, pins, ignores, cross_devices: explicit }
     }
 }

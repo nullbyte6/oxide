@@ -19,8 +19,10 @@ screen, and lets you stage, commit, push, pull, fetch and merge without leaving 
 
 - **Whole machine**: scans every mounted drive (internal and external) by default, not just your home directory.
 - **Every repo at a glance**: branch, ahead/behind, staged, modified, untracked and conflicted counts.
-- **Owned vs cloned filter**: switch between *All*, *Owned* and *Cloned* repositories.
-- **Git actions**: stage/unstage (per file or all), commit, push, pull, fetch (one repo or all), merge.
+- **Owned vs cloned filter**: switch between *All*, *Owned*, *Cloned* and *Attention* (dirty, ahead, behind or broken) repositories.
+- **Sorting, pinning and hiding**: sort by name, last commit, changes or commits behind; pin favourites to the top and ignore noisy repositories.
+- **Git actions**: stage/unstage (per file or all), commit, push, pull, fetch (one repo or all), merge, stash and pop; pull or push every repository in view at once.
+- **Jump out**: open the selected file or repository in your editor, a shell or the file manager.
 - **Non-blocking**: scans and git commands run on background threads; the UI never freezes.
 - **Search**: filter the list live by name, branch or path.
 - **Logs**: an in-app log panel plus a persistent log file.
@@ -65,7 +67,10 @@ oxide [OPTIONS] [PATH...]
 | `↑` `↓` / `j` `k` | Move selection |
 | `g` / `G` | First / last item |
 | `Tab`, `←` `→`, `h` `l` | Switch between the repository list and the changes list |
-| `f`, `1` `2` `3` | Filter: cycle, or All / Owned / Cloned |
+| `f`, `1` `2` `3` `4` | Filter: cycle, or All / Owned / Cloned / Attention |
+| `s` | Sort: name / recent / changes / behind (pinned repositories always come first) |
+| `*` / `x` | Pin / ignore the selected repository |
+| `H` | Show ignored repositories (marked `⊘`) |
 | `/` | Search (live); `Esc` clears |
 | `Space` / `Enter` | Stage or unstage the highlighted file |
 | `a` / `u` | Stage all / unstage all |
@@ -74,12 +79,19 @@ oxide [OPTIONS] [PATH...]
 | `P` | Push (a branch without upstream is published with `-u`) |
 | `F` | Fetch the selected repository (`--all --prune`) |
 | `A` | Fetch every repository in the current view |
+| `L` | Pull (fast-forward only) every repository in the view that is behind its upstream |
+| `U` | Push every repository in the view that is ahead of its upstream (asks `y` to confirm) |
+| `z` / `Z` | Stash all changes including untracked files / pop the latest stash |
+| `e` | Open the highlighted file (repository list focused: the repository) in `$VISUAL` / `$EDITOR` |
+| `t` | Open `$SHELL` in the repository; exit it to return |
+| `o` | Open the repository folder in the file manager (`xdg-open`) |
 | `m` | Merge a branch into the current one (empty input merges the upstream) |
 | `r` / `R` | Reload the selected repository / rescan all roots |
 | `?` | Help |
 | `q`, `Ctrl+C` | Quit |
 
-Row symbols: `↑n` ahead, `↓n` behind, `+` staged, `~` modified, `?` untracked, `!` conflicts.
+Row symbols: `↑n` ahead, `↓n` behind, `+` staged, `~` modified, `?` untracked, `!` conflicts, `$n` stashes;
+`★` marks a pinned repository and `⊘` an ignored one.
 
 ## Design
 
@@ -124,7 +136,15 @@ owner = my-company
 
 # how many directory levels below each root are searched
 depth = 6
+
+# repositories listed first / hidden: a directory name, or a path (a value with a "/" or a leading "~"
+# also covers every repository below it)
+pin = oxide
+ignore = ~/dev/vendor
 ```
+
+The `*` and `x` keys store their marks in `~/.local/state/oxide/marks` (or `$XDG_STATE_HOME/oxide/marks`),
+so the config file is never rewritten. A mark that comes from the config file can only be removed there.
 
 ## What gets scanned
 
@@ -177,6 +197,7 @@ run in batch mode unless you set `core.sshCommand`, `GIT_SSH_COMMAND` or `GIT_SS
 | `src/repo.rs` | Repository model, discovery, owned/cloned classification |
 | `src/worker.rs` | Background scan and operation threads |
 | `src/config.rs` | Config file, roots and owner names |
+| `src/marks.rs` | Pinned and ignored repositories (config entries and state file) |
 | `src/logger.rs` | Persistent log file |
 | `src/banner.rs` | Turns `src/banner.sh` into monochrome Ratatui lines |
 | `src/banner.sh` | The ASCII banner art shown on top of the dashboard |
