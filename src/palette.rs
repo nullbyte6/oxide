@@ -54,11 +54,11 @@ pub const ENTRIES: &[Entry] = &[
 ];
 
 /// Matches `query` against every entry. Returns `(entry index, matched character positions)`, best
-/// match first; an empty query returns all entries in their listed order.
+/// match first. An empty query matches nothing, so the palette stays empty until something is typed.
 pub fn matches(query: &str) -> Vec<(usize, Vec<usize>)> {
     let q: Vec<char> = query.to_lowercase().chars().filter(|c| !c.is_whitespace()).collect();
     if q.is_empty() {
-        return (0..ENTRIES.len()).map(|i| (i, Vec::new())).collect();
+        return Vec::new();
     }
     let mut found: Vec<(i32, usize, Vec<usize>)> = ENTRIES
         .iter()

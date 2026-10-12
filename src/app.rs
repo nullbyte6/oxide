@@ -857,7 +857,6 @@ impl App {
 
     fn open_palette(&mut self) {
         self.palette = Palette::default();
-        self.palette.state.select(Some(0));
         self.mode = Mode::Palette;
     }
 

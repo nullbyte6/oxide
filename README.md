@@ -95,7 +95,7 @@ oxide [OPTIONS] [PATH...]
 | `o` | Open the repository folder in the file manager (`xdg-open`) |
 | `m` | Merge a branch into the current one (empty input merges the upstream) |
 | `r` / `R` | Reload the selected repository / rescan all roots |
-| `:` / `Ctrl+P` | Command palette: type a few letters of any action (fuzzy matched), `↑` `↓` pick, `Enter` runs it, `Esc` closes |
+| `:` / `Ctrl+P` | Command palette: starts empty, type a few letters of any action (fuzzy matched), `↑` `↓` pick, `Enter` runs it, `Esc` closes |
 | `h` | Hide / show the key bar at the bottom (the row goes back to the panels; prompts still use it) |
 | `?` | Help |
 | `q`, `Ctrl+C` | Quit |

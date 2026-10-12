@@ -699,7 +699,7 @@ fn draw_palette(f: &mut Frame, app: &mut App) {
     let found = palette::matches(&app.palette.query);
     let area = f.area();
     let w = 70.min(area.width);
-    let h = (found.len().max(1) as u16 + 4).min(area.height.saturating_sub(2).max(5)).min(area.height);
+    let h = (found.len().max(1) as u16 + 3).min(area.height.saturating_sub(2).max(5)).min(area.height);
     let [_, mid, _] = Layout::vertical([Constraint::Percentage(20), Constraint::Length(h), Constraint::Fill(1)]).areas(area);
     let [_, popup, _] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(w), Constraint::Fill(1)]).areas(mid);
     f.render_widget(Clear, popup);
@@ -716,7 +716,8 @@ fn draw_palette(f: &mut Frame, app: &mut App) {
     f.render_widget(Paragraph::new(query), query_row);
 
     if found.is_empty() {
-        f.render_widget(Paragraph::new("No command matches.").style(DIM.add_modifier(Modifier::ITALIC)), list_area);
+        let msg = if app.palette.query.is_empty() { "Type to search commands…" } else { "No command matches." };
+        f.render_widget(Paragraph::new(msg).style(DIM.add_modifier(Modifier::ITALIC)), list_area);
         return;
     }
     let key_w = 6;
