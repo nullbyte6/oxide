@@ -1,0 +1,72 @@
+//! Background threads: repository scans and git operations.
+//! Results reach the UI thread through an mpsc channel, so drawing never blocks on git.
+
+use std::{
+    collections::VecDeque,
+    path::PathBuf,
+    sync::{Arc, Mutex, mpsc::Sender},
+    thread,
+    time::Instant,
+};
+
+use crate::{
+    config::Config,
+    git::{self, Op},
+    repo::{self, Repo},
+};
+
+/// Upper bound of concurrent git processes.
+const WORKERS: usize = 8;
+
+pub enum Msg {
+    /// Discovery finished; carries every repository path that will be loaded.
+    ScanStarted(Vec<PathBuf>),
+    /// A freshly loaded repository state (from a scan or after an operation).
+    Repo(Repo),
+    /// The scan loaded everything; carries the elapsed milliseconds.
+    ScanDone(u128),
+    /// An operation finished.
+    Op { path: PathBuf, label: &'static str, result: Result<String, String> },
+}
+
+/// Runs `f` over `items` on up to `WORKERS` threads and returns when all are done.
+fn pool<T: Send>(items: Vec<T>, f: impl Fn(T) + Sync) {
+    let threads = WORKERS.min(items.len());
+    let queue = Mutex::new(VecDeque::from(items));
+    thread::scope(|s| {
+        for _ in 0..threads {
+            s.spawn(|| {
+                loop {
+                    // Take the lock only for the pop, never while `f` runs.
+                    let item = queue.lock().unwrap().pop_front();
+                    let Some(item) = item else { break };
+                    f(item);
+                }
+            });
+        }
+    });
+}
+
+/// Discovers repositories and loads their state in the background.
+pub fn spawn_scan(cfg: Arc<Config>, tx: Sender<Msg>) {
+    thread::spawn(move || {
+        let started = Instant::now();
+        let paths = repo::discover(&cfg);
+        let _ = tx.send(Msg::ScanStarted(paths.clone()));
+        pool(paths, |p| {
+            let _ = tx.send(Msg::Repo(repo::load(&p, &cfg)));
+        });
+        let _ = tx.send(Msg::ScanDone(started.elapsed().as_millis()));
+    });
+}
+
+/// Runs the operations in the background and reloads each affected repository afterwards.
+pub fn spawn_ops(jobs: Vec<(PathBuf, Op)>, cfg: Arc<Config>, tx: Sender<Msg>) {
+    thread::spawn(move || {
+        pool(jobs, |(path, op)| {
+            let result = git::perform(&path, &op);
+            let _ = tx.send(Msg::Op { path: path.clone(), label: op.label(), result });
+            let _ = tx.send(Msg::Repo(repo::load(&path, &cfg)));
+        });
+    });
+}
