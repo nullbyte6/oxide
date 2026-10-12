@@ -5,14 +5,14 @@ Oxide finds every repository on your machine, shows the state of all of them in 
 screen, and lets you stage, commit, push, pull, fetch and merge without leaving it.
 
 ```
-┌ ◆ OXIDE v0.1.0 ───────────────────────────── 12 repos · 3 dirty · 2 ahead · 1 behind ┐
-│ All (12) │ Owned (7) │ Cloned (5)                                                    │
+┌─┤ ◆ OXIDE v0.1.0 ├───────────────────────── 12 repos · 3 dirty · 2 ahead · 1 behind ┐
+│  All 12  ┊  Owned 7  ┊  Cloned 5                                                     │
 └──────────────────────────────────────────────────────────────────────────────────────┘
-┌ Repositories · all (12) ─────────────────┐┌ oxide ──────────────────────────────────┐
-│▶ ● oxide        own   main     ↑1 ~2 ?7  ││ path     /home/you/oxide                │
-│  ● ratatui      clone main     ↓3        ││ branch   main  → origin/main            │
-│  ● notes        own   main               ││ owner    owned                          │
-└──────────────────────────────────────────┘└─────────────────────────────────────────┘
+┏─┤ Repositories · all (12) ├━━━━━━━━━━━━━━━┓ ┌─┤ oxide ├─────────────────────────────┐
+┃ oxide        own   main     ↑1 ~2 ?7      ┃ │ path     /home/you/oxide              │
+┃ ratatui      clone main     ↓3            ┃ │ branch   main  → origin/main          │
+┃ notes        own   main                   ┃ │ owner    owned                        │
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛ └───────────────────────────────────────┘
 ```
 
 ## Features
@@ -79,7 +79,6 @@ oxide [OPTIONS] [PATH...]
 | `?` | Help |
 | `q`, `Ctrl+C` | Quit |
 
-Status symbols: `○` clean, `●` dirty, `✖` conflicts or error.
 Row symbols: `↑n` ahead, `↓n` behind, `+` staged, `~` modified, `?` untracked, `!` conflicts.
 
 ## Design
@@ -92,7 +91,7 @@ from bold, dim, italic and inverse text rather than hues:
   panel gets a thick border.
 - **Selection** is an inverse row (faded in the pane that has no focus), without any marker.
 - **Activity**: a spinner and progress bar (`▰▰▰▱▱▱▱▱▱▱`) in the header while scanning, and the
-  number of running git operations; a spinner replaces the status symbol of busy rows.
+  number of running git operations; busy rows show a spinner next to the running operation.
 - **Dimming**: zero counters, hashes, labels and cloned repositories are dimmed, and log
   entries fade as they age (the newest three keep full weight).
 - **Key caps** in the footer, `─┤ title ├─` notches on panel titles, a double-border help window.

@@ -108,15 +108,6 @@ fn fit(s: &str, w: usize) -> String {
     }
 }
 
-/// Status symbol of a repository row: `○` clean, `●` dirty, `✖` conflict or error.
-fn health_symbol(h: Health) -> &'static str {
-    match h {
-        Health::Clean => "○",
-        Health::Dirty => "●",
-        Health::Conflict | Health::Error => "✖",
-    }
-}
-
 /// Progress bar of `width` cells, e.g. `▰▰▰▱▱▱▱▱▱▱`.
 fn bar(done: usize, total: usize, width: usize) -> String {
     let filled = (done * width).checked_div(total).unwrap_or(0).min(width);
@@ -173,18 +164,12 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn repo_row(r: &Repo, busy: Option<&str>, tick: usize, name_w: usize) -> ListItem<'static> {
-    let marker = match busy {
-        Some(_) => Span::styled(SPINNER[tick % SPINNER.len()], BOLD),
-        None => Span::styled(health_symbol(r.health()), if r.health() == Health::Clean { DIM } else { BOLD }),
-    };
     // Cloned repositories are dimmed so owned ones stand out.
     let (badge, badge_style) = match r.owner {
         Owner::Owned => ("own  ", PLAIN),
         Owner::Cloned => ("clone", DIM),
     };
     let mut spans = vec![
-        marker,
-        Span::raw(" "),
         Span::styled(fit(&r.name, name_w), BOLD),
         Span::raw(" "),
         Span::styled(badge, badge_style),
@@ -199,7 +184,7 @@ fn repo_row(r: &Repo, busy: Option<&str>, tick: usize, name_w: usize) -> ListIte
         spans.push(Span::styled(format!("↓{} ", r.behind), PLAIN));
     }
     if let Some(label) = busy {
-        spans.push(Span::styled(format!("{label}… "), BOLD));
+        spans.push(Span::styled(format!("{} {label}… ", SPINNER[tick % SPINNER.len()]), BOLD));
     }
     if r.error.is_some() {
         spans.push(Span::styled("error", BOLD));
@@ -227,7 +212,7 @@ fn draw_repos(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     // Give the name column the spare width, between 12 and 28 characters.
-    let name_w = (area.width as usize).saturating_sub(48).clamp(12, 28);
+    let name_w = (area.width as usize).saturating_sub(46).clamp(12, 28);
     let items: Vec<ListItem> = app
         .visible
         .iter()
@@ -389,7 +374,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_help(f: &mut Frame) {
-    let rows: [(&str, &str); 22] = [
+    let rows: [(&str, &str); 21] = [
         ("↑ ↓ / j k", "move selection"),
         ("g / G", "first / last"),
         ("Tab, ← →, h l", "switch between repositories and changes"),
@@ -408,7 +393,6 @@ fn draw_help(f: &mut Frame) {
         ("?", "this help"),
         ("q, Ctrl+C", "quit"),
         ("", ""),
-        ("○ ● ✖", "clean · dirty · conflict or error"),
         ("↑n ↓n", "commits ahead / behind upstream"),
         ("+ ~ ? !", "staged · modified · untracked · conflicts"),
         ("", "Any key closes this window."),
