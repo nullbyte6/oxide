@@ -2,7 +2,7 @@
 
 use std::{
     env,
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::OnceLock,
 };
@@ -79,6 +79,14 @@ pub enum Op {
     Reset(String),
     /// Check out a branch or commit by name.
     Checkout(String),
+    /// Create a worktree for a branch at `path`, creating the branch when it does not exist.
+    AddWorktree { path: PathBuf, branch: String },
+    /// Remove a linked worktree; `force` also discards its uncommitted changes.
+    RemoveWorktree { path: PathBuf, force: bool },
+    /// Forget worktrees whose folder is gone.
+    PruneWorktrees,
+    /// Initialise and update a submodule (an empty path means all of them, recursively).
+    UpdateSubmodule(String),
     /// Apply one hunk of a diff to the index: stage it, or with `reverse` unstage it.
     Hunk { patch: String, reverse: bool },
 }
@@ -104,6 +112,10 @@ impl Op {
             Op::CheckoutPr(_) => "pr checkout",
             Op::Clone(_) => "clone",
             Op::Delete => "delete",
+            Op::AddWorktree { .. } => "worktree add",
+            Op::RemoveWorktree { .. } => "worktree remove",
+            Op::PruneWorktrees => "worktree prune",
+            Op::UpdateSubmodule(_) => "submodule update",
             Op::Amend(_) => "amend",
             Op::Reset(_) => "reset",
             Op::Checkout(_) => "checkout",
@@ -358,6 +370,66 @@ pub fn config_get(repo: &Path, key: &str) -> Option<String> {
     (!v.is_empty()).then_some(v)
 }
 
+/// A linked worktree or a submodule of a repository.
+pub struct TreeItem {
+    pub kind: TreeKind,
+    /// Absolute folder of a worktree; folder of a submodule relative to the repository.
+    pub path: String,
+    /// Branch of a worktree (`(detached)` without one); `git describe` of a submodule.
+    pub label: String,
+    /// Abbreviated commit that is checked out.
+    pub head: String,
+}
+
+pub enum TreeKind {
+    /// The first worktree: the repository's own folder.
+    Main,
+    Linked { locked: bool, prunable: bool },
+    /// `state` is git's status character: `' '` in sync, `-` not initialised, `+` other commit, `U` conflicts.
+    Submodule { state: char },
+}
+
+/// The repository's worktrees, then its submodules.
+pub fn trees(repo: &Path) -> Result<Vec<TreeItem>, String> {
+    let mut items = Vec::new();
+    let out = run(repo, &["worktree", "list", "--porcelain"])?;
+    // Blocks of `key value` lines separated by blank lines; the first block is the main worktree.
+    for (n, block) in out.split("\n\n").filter(|b| !b.trim().is_empty()).enumerate() {
+        let (mut path, mut head, mut branch) = (String::new(), String::new(), String::new());
+        let (mut locked, mut prunable, mut bare) = (false, false, false);
+        for line in block.lines() {
+            let (key, val) = line.split_once(' ').unwrap_or((line, ""));
+            match key {
+                "worktree" => path = val.to_string(),
+                "HEAD" => head = val.chars().take(7).collect(),
+                "branch" => branch = val.strip_prefix("refs/heads/").unwrap_or(val).to_string(),
+                "locked" => locked = true,
+                "prunable" => prunable = true,
+                "bare" => bare = true,
+                _ => {}
+            }
+        }
+        if bare {
+            continue;
+        }
+        let kind = if n == 0 { TreeKind::Main } else { TreeKind::Linked { locked, prunable } };
+        let label = if branch.is_empty() { "(detached)".to_string() } else { branch };
+        items.push(TreeItem { kind, path, label, head });
+    }
+    // `git submodule status`: `<state char><sha> <path> (<describe>)`; the describe part is missing when not initialised.
+    for line in run(repo, &["submodule", "status"]).unwrap_or_default().lines() {
+        let state = line.chars().next().unwrap_or(' ');
+        let rest = line.get(1..).unwrap_or("");
+        let Some((sha, rest)) = rest.split_once(' ') else { continue };
+        let (path, label) = match rest.rsplit_once(" (") {
+            Some((path, describe)) => (path, describe.trim_end_matches(')')),
+            None => (rest, ""),
+        };
+        items.push(TreeItem { kind: TreeKind::Submodule { state }, path: path.to_string(), label: label.to_string(), head: sha.chars().take(7).collect() });
+    }
+    Ok(items)
+}
+
 /// A local or remote-tracking branch.
 pub struct Branch {
     /// Short name: `main` or `origin/main`.
@@ -445,6 +517,20 @@ pub fn perform(repo: &Path, op: &Op) -> Result<String, String> {
         Op::Clone(_) if repo.read_dir().is_ok_and(|mut d| d.next().is_some()) => Err(format!("{} already exists and is not empty", repo.display())),
         Op::Clone(slug) => crate::github::clone(slug, repo),
         Op::Delete => delete_repo(repo),
+        Op::AddWorktree { branch, .. } if branch.is_empty() || branch.starts_with('-') => Err(format!("invalid branch name '{branch}'")),
+        Op::AddWorktree { path, branch } => {
+            let path = path.display().to_string();
+            let exists = run(repo, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_ok();
+            // An existing branch is checked out as it is; a new name creates the branch from HEAD.
+            if exists { run_all(repo, &["worktree", "add", &path, branch]) } else { run_all(repo, &["worktree", "add", "-b", branch, &path]) }
+        }
+        Op::RemoveWorktree { path, force } => {
+            let path = path.display().to_string();
+            if *force { run_all(repo, &["worktree", "remove", "--force", &path]) } else { run_all(repo, &["worktree", "remove", &path]) }
+        }
+        Op::PruneWorktrees => run_all(repo, &["worktree", "prune", "--verbose"]),
+        Op::UpdateSubmodule(p) if p.is_empty() => run_all(repo, &["submodule", "update", "--init", "--recursive"]),
+        Op::UpdateSubmodule(p) => run_all(repo, &["submodule", "update", "--init", "--recursive", "--", p]),
         Op::Amend(msg) if msg.is_empty() => run_all(repo, &["commit", "--amend", "--no-edit"]),
         Op::Amend(msg) => run_all(repo, &["commit", "--amend", "-m", msg]),
         Op::Reset(rev) | Op::Checkout(rev) if rev.is_empty() || rev.starts_with('-') => Err(format!("invalid target '{rev}'")),

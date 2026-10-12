@@ -19,7 +19,7 @@ use crate::{
     app::{App, Filter, Focus, InputKind, Mode},
     banner,
     diff::{Row, Sign},
-    git::{Branch, DiffKind, FileEntry},
+    git::{Branch, DiffKind, FileEntry, TreeKind},
     github::{Ci, Kind},
     logger::{self, Level},
     palette,
@@ -115,6 +115,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::History => draw_history(f, app),
         Mode::Branches => draw_branches(f, app),
         Mode::Reflog => draw_reflog(f, app),
+        Mode::Trees => draw_trees(f, app),
         Mode::GitHub => draw_github(f, app),
         Mode::Text => draw_text(f, app),
         Mode::Finder => draw_finder(f, app),
@@ -477,6 +478,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     if let Mode::Input(kind) = app.mode {
         let prompt = match kind {
             InputKind::Commit => format!("commit message → {} (Tab: type)", app.selected().map_or("", |r| r.name.as_str())),
+            InputKind::Worktree => "new worktree for branch (created next to the repository, branch made if missing)".to_string(),
             InputKind::Amend => format!("amend last commit of {} (empty = keep message, Tab: type)", app.selected().map_or("", |r| r.name.as_str())),
             InputKind::Merge => format!("merge into {} (empty = upstream)", app.selected().map_or("", |r| r.branch.as_str())),
             InputKind::Search => "search".to_string(),
@@ -527,6 +529,11 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     }
     if app.mode == Mode::Reflog {
         let hints = [("↑↓", "move"), ("u", "undo this entry"), ("Enter", "move branch here"), ("d", "show the commit"), ("Esc", "close")];
+        f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
+        return;
+    }
+    if app.mode == Mode::Trees {
+        let hints = [("↑↓", "move"), ("Enter", "go to worktree"), ("n", "new worktree"), ("d", "remove"), ("D", "force remove"), ("p", "prune"), ("u", "update submodule"), ("U", "update all"), ("Esc", "close")];
         f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
         return;
     }
@@ -784,6 +791,66 @@ fn draw_reflog(f: &mut Frame, app: &mut App) {
     f.render_stateful_widget(List::new(items).block(block).highlight_style(INVERSE), area, &mut v.state);
 }
 
+/// Worktrees and submodules of a repository, as a popup with the newest log message below it.
+fn draw_trees(f: &mut Frame, app: &mut App) {
+    let last = app.log.last().map(|l| l.text.clone()).unwrap_or_default();
+    let Some(v) = app.trees.as_mut() else { return };
+    let rows = v.items.as_ref().map_or(1, Vec::len) as u16;
+    let area = f.area();
+    let w = 110.min(area.width);
+    let h = (rows + 2).clamp(5, area.height.saturating_sub(2).max(5)).min(area.height);
+    let [_, mid, _] = Layout::vertical([Constraint::Fill(1), Constraint::Length(h), Constraint::Fill(1)]).areas(area);
+    let [_, popup, _] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(w), Constraint::Fill(1)]).areas(mid);
+    f.render_widget(Clear, popup);
+    let block = pane(format!(" Worktrees and submodules · {} ", v.name), true).title_bottom(Line::from(Span::styled(format!(" {last} "), DIM)));
+    let note = |msg: String, f: &mut Frame, block: Block<'static>| {
+        f.render_widget(Paragraph::new(msg).style(DIM.add_modifier(Modifier::ITALIC)).block(block), popup);
+    };
+    if let Some(e) = &v.error {
+        return note(format!("git worktree failed: {}", e.lines().next().unwrap_or("")), f, block);
+    }
+    let Some(items) = &v.items else { return note("Loading…".to_string(), f, block) };
+    let home = crate::config::home().display().to_string();
+    let path_w = (popup.width as usize).saturating_sub(4 + 11 + 22 + 9 + 14).max(16);
+    let rows: Vec<ListItem> = items
+        .iter()
+        .map(|i| {
+            let (tag, tag_style, flags) = match &i.kind {
+                TreeKind::Main => ("main", hue(BOLD, GOOD), String::new()),
+                TreeKind::Linked { locked, prunable } => {
+                    let flags = [(*locked, "locked "), (*prunable, "missing ")].iter().filter(|(on, _)| *on).map(|(_, s)| *s).collect::<String>();
+                    ("worktree", hue(PLAIN, ACCENT), flags)
+                }
+                TreeKind::Submodule { state } => {
+                    let flags = match state {
+                        '-' => "not initialised",
+                        '+' => "other commit",
+                        'U' => "conflicts",
+                        _ => "",
+                    };
+                    ("submodule", hue(PLAIN, PINK), flags.to_string())
+                }
+            };
+            // Worktree paths are absolute: show `~` for the home directory so the useful part fits.
+            let path = i.path.strip_prefix(&home).map_or_else(|| i.path.clone(), |p| format!("~{p}"));
+            let flag_style = if flags.starts_with("conflicts") || flags.starts_with("missing") { hue(BOLD, BAD) } else { hue(PLAIN, WARN) };
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{tag:<10}"), tag_style),
+                Span::styled(fit(&path, path_w), BOLD),
+                Span::raw(" "),
+                Span::styled(fit(&i.label, 20), hue(PLAIN, ACCENT)),
+                Span::raw(" "),
+                Span::styled(format!("{:<8}", i.head), hue(DIM, WARN)),
+                Span::styled(flags, flag_style),
+            ]))
+        })
+        .collect();
+    if rows.is_empty() {
+        return note("No worktrees or submodules.".to_string(), f, block);
+    }
+    f.render_stateful_widget(List::new(rows).block(block).highlight_style(INVERSE), popup, &mut v.state);
+}
+
 /// Colored label for a branch, if any: merged and stale ones are candidates for cleanup.
 fn branch_tags(b: &Branch) -> Vec<Span<'static>> {
     let mut tags = Vec::new();
@@ -1022,6 +1089,7 @@ fn draw_help(f: &mut Frame) {
         ("L / U", "pull every behind / push every ahead repository in view"),
         ("m z Z", "merge a branch (empty = upstream) / stash all changes / pop the stash"),
         ("d v b I", "diff of the file / commit log / branches / git init in any folder"),
+        ("W", "worktrees and submodules: add / remove / go to / update"),
         ("O", "reflog: where HEAD has been; u undoes an entry, Enter moves the branch there"),
         ("D", "DELETE the repository from disk (asks you to type its name)"),
         ("i y B S", "GitHub: issues / pull requests / repo in browser / find & clone"),

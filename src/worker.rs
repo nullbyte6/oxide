@@ -36,6 +36,8 @@ pub enum Msg {
     History { id: u64, result: Result<Vec<git::Commit>, String> },
     /// The reflog (or error) requested with the given id.
     Reflog { id: u64, result: Result<Vec<git::ReflogEntry>, String> },
+    /// Worktrees and submodules (or the error) requested with the given id.
+    Trees { id: u64, result: Result<Vec<git::TreeItem>, String> },
     /// The branch list (or error) requested with the given id.
     Branches { id: u64, result: Result<Vec<git::Branch>, String> },
     /// The repository's folder was deleted from disk; drop it from the list.
@@ -96,7 +98,22 @@ pub fn spawn_ops(jobs: Vec<(PathBuf, Op)>, cfg: Arc<Config>, tx: Sender<Msg>) {
             let result = git::perform(&path, &op);
             let failed_init = matches!(op, Op::Init | Op::Clone(_)) && result.is_err();
             let deleted = matches!(op, Op::Delete) && result.is_ok();
+            let worktree = match &op {
+                Op::AddWorktree { path, .. } if result.is_ok() => Some((path.clone(), true)),
+                Op::RemoveWorktree { path, .. } if result.is_ok() => Some((path.clone(), false)),
+                _ => None,
+            };
             let _ = tx.send(Msg::Op { path: path.clone(), label: op.label(), result });
+            // A new worktree is a repository of its own that joins the list; a removed one leaves it.
+            match worktree {
+                Some((wt, true)) => {
+                    let _ = tx.send(Msg::Repo(repo::load(&wt, &cfg)));
+                }
+                Some((wt, false)) => {
+                    let _ = tx.send(Msg::Removed(wt));
+                }
+                None => {}
+            }
             if deleted {
                 let _ = tx.send(Msg::Removed(path));
                 return; // nothing left to reload
@@ -155,6 +172,13 @@ pub fn spawn_history(repo: PathBuf, id: u64, tx: Sender<Msg>) {
 pub fn spawn_reflog(repo: PathBuf, id: u64, tx: Sender<Msg>) {
     thread::spawn(move || {
         let _ = tx.send(Msg::Reflog { id, result: git::reflog(&repo, 300) });
+    });
+}
+
+/// Loads worktrees and submodules in the background.
+pub fn spawn_trees(repo: PathBuf, id: u64, tx: Sender<Msg>) {
+    thread::spawn(move || {
+        let _ = tx.send(Msg::Trees { id, result: git::trees(&repo) });
     });
 }
 

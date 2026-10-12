@@ -95,6 +95,7 @@ oxide [OPTIONS] [PATH...]
 | `z` / `Z` | Stash all changes including untracked files / pop the latest stash |
 | `v` | Commit log of the selected repository (see below) |
 | `b` | Branches of the selected repository (see below) |
+| `W` | Worktrees and submodules of the selected repository (see below) |
 | `I` | `git init` in a folder: the prompt starts with the current directory, append a name for a new folder |
 | `i` / `y` | GitHub issues / pull requests of the selected repository (see below) |
 | `B` | Open the selected repository's GitHub page in the browser |
@@ -232,6 +233,25 @@ when there is no remote and the folder is the only copy. Any other input, or `Es
 On top of the prompt, Oxide refuses to delete a symlink, a worktree or submodule (whose `.git` is a file),
 anything that is not a standalone repository folder, and any folder that is or contains your home directory.
 Deleting is final: it does not use a trash.
+
+### Worktrees and submodules
+
+`W` lists the repository's worktrees (the main one first, then linked ones with their branch and any
+`locked` / `missing` flag) and its submodules (with `git describe` and `not initialised`, `other commit` or `conflicts`
+when they are not in sync). It works from a linked worktree too: the commands then run from the main folder.
+
+| Key | Action |
+| --- | --- |
+| `n` | New worktree: asks for a branch; the folder is created next to the main one as `<repo>-<branch>` (`/` becomes `-`), the branch is made from HEAD when it does not exist. It joins the repository list at once |
+| `Enter` | Select the highlighted worktree on the dashboard (it must be in the list; a worktree outside the scan roots needs `R` or an extra `root`) |
+| `d` / `D` | Remove the linked worktree after `y`; `D` also discards its uncommitted changes. The main worktree and locked ones are refused |
+| `p` | `git worktree prune`: forget worktrees whose folder is gone |
+| `u` / `U` | `git submodule update --init --recursive` for the highlighted submodule / for all of them (asks `y`) |
+| `↑` `↓` / `j` `k`, `g` / `G`, `Space` / `b` | Move |
+| `Esc`, `q`, `W` | Close |
+
+Linked worktrees are repositories like any other and appear in the list; submodules do not, since nested
+repositories are not scanned.
 
 ### git init
 

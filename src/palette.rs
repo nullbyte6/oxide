@@ -25,6 +25,7 @@ pub const ENTRIES: &[Entry] = &[
     e("Amend the last commit", "E", 'E'),
     e("Reflog: see and undo what happened to HEAD", "O", 'O'),
     e("Manage branches", "b", 'b'),
+    e("Worktrees and submodules", "W", 'W'),
     e("Merge a branch into the current one", "m", 'm'),
     e("GitHub issues of this repository", "i", 'i'),
     e("GitHub pull requests of this repository", "y", 'y'),

@@ -18,7 +18,7 @@ use ratatui::widgets::ListState;
 use crate::{
     config::{self, Config},
     diff::{self, Diff},
-    git::{self, Branch, Commit, DiffKind, Op, ReflogEntry},
+    git::{self, Branch, Commit, DiffKind, Op, ReflogEntry, TreeItem, TreeKind},
     github::{self, Ci, Item, Kind, RepoItem, State},
     logger::{self, Level, Logger},
     marks::{Mark, Marks},
@@ -221,6 +221,28 @@ pub struct ReflogView {
     id: u64,
 }
 
+/// The worktrees and submodules of one repository.
+pub struct TreesView {
+    pub repo: PathBuf,
+    pub name: String,
+    /// None while loading.
+    pub items: Option<Vec<TreeItem>>,
+    pub error: Option<String>,
+    pub state: ListState,
+    id: u64,
+}
+
+impl TreesView {
+    fn selected(&self) -> Option<&TreeItem> {
+        self.items.as_ref()?.get(self.state.selected()?)
+    }
+
+    /// The repository's own folder: where worktree commands run from, whichever worktree is open.
+    fn main(&self) -> PathBuf {
+        self.items.as_ref().and_then(|i| i.first()).map_or_else(|| self.repo.clone(), |m| PathBuf::from(&m.path))
+    }
+}
+
 /// The branches of one repository.
 pub struct BranchView {
     pub repo: PathBuf,
@@ -321,6 +343,8 @@ pub enum InputKind {
     DeleteRepo,
     /// Message for amending the last commit (empty keeps the old one).
     Amend,
+    /// Branch for a new worktree.
+    Worktree,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -339,6 +363,8 @@ pub enum Mode {
     Branches,
     /// The reflog (`App::reflog`) is open.
     Reflog,
+    /// The worktree and submodule list (`App::trees`) is open.
+    Trees,
     /// The GitHub issue or pull request list (`App::gh`) is open.
     GitHub,
     /// An issue or pull request opened as text (`App::text`).
@@ -393,6 +419,7 @@ pub struct App {
     pub history: Option<HistoryView>,
     pub branches: Option<BranchView>,
     pub reflog: Option<ReflogView>,
+    pub trees: Option<TreesView>,
     /// Why the next commit may be made with the wrong identity (shown next to the commit prompt).
     pub commit_warn: Option<String>,
     /// The message of the commit being made, and of the last one that failed (e.g. rejected by a hook).
@@ -518,6 +545,7 @@ impl App {
             history: None,
             branches: None,
             reflog: None,
+            trees: None,
             commit_warn: None,
             pending_msg: None,
             retry_msg: None,
@@ -704,6 +732,19 @@ impl App {
                         }
                     }
                 }
+                Msg::Trees { id, result } => {
+                    if let Some(v) = self.trees.as_mut().filter(|v| v.id == id) {
+                        match result {
+                            Ok(items) => {
+                                let keep = v.state.selected().unwrap_or(0).min(items.len().saturating_sub(1));
+                                v.state.select(if items.is_empty() { None } else { Some(keep) });
+                                v.items = Some(items);
+                                v.error = None;
+                            }
+                            Err(e) => v.error = Some(e),
+                        }
+                    }
+                }
                 Msg::GitHub { id, result } => {
                     if let Some(v) = self.gh.as_mut().filter(|v| v.id == id) {
                         match result {
@@ -778,6 +819,9 @@ impl App {
                     }
                     if self.reflog.as_ref().is_some_and(|v| v.repo == path) {
                         self.load_reflog(); // the operation added a line to the reflog
+                    }
+                    if self.trees.as_ref().is_some_and(|v| v.main() == path || v.repo == path) {
+                        self.load_trees();
                     }
                     if label == "commit" {
                         // A commit that failed (a hook said no) keeps its message for the next try.
@@ -977,6 +1021,7 @@ impl App {
             Mode::History => self.on_history_key(key),
             Mode::Branches => self.on_branch_key(key),
             Mode::Reflog => self.on_reflog_key(key),
+            Mode::Trees => self.on_trees_key(key),
             Mode::GitHub => self.on_gh_key(key),
             Mode::Text => self.on_text_key(key),
             Mode::Finder => self.on_finder_key(key),
@@ -1018,6 +1063,7 @@ impl App {
             KeyCode::Char('v') => self.open_history(),
             KeyCode::Char('b') => self.open_branches(),
             KeyCode::Char('O') => self.open_reflog(),
+            KeyCode::Char('W') => self.open_trees(),
             KeyCode::Char('E') => self.open_amend(),
             KeyCode::Char('I') => self.open_init(),
             KeyCode::Char('i') => self.open_gh(Kind::Issues),
@@ -1221,6 +1267,132 @@ impl App {
             _ => return,
         };
         v.state.select(step(v.state.selected(), len, delta));
+    }
+
+    // ---- worktrees and submodules ----
+
+    fn open_trees(&mut self) {
+        let Some((repo, name)) = self.selected().map(|r| (r.path.clone(), r.name.clone())) else { return };
+        self.trees = Some(TreesView { repo, name, items: None, error: None, state: ListState::default(), id: 0 });
+        self.mode = Mode::Trees;
+        self.load_trees();
+    }
+
+    fn load_trees(&mut self) {
+        self.diff_id += 1;
+        if let Some(v) = self.trees.as_mut() {
+            v.id = self.diff_id;
+            worker::spawn_trees(v.repo.clone(), v.id, self.tx.clone());
+        }
+    }
+
+    fn on_trees_key(&mut self, key: KeyEvent) {
+        let Some(v) = self.trees.as_mut() else {
+            self.mode = Mode::Normal;
+            return;
+        };
+        let len = v.items.as_ref().map_or(0, Vec::len);
+        let main = v.main();
+        // The highlighted worktree as (folder, locked) and submodule as its folder, for the actions below.
+        let picked = v.selected().map(|i| (i.path.clone(), matches!(i.kind, TreeKind::Linked { locked: true, .. }), matches!(i.kind, TreeKind::Main), matches!(i.kind, TreeKind::Submodule { .. })));
+        let delta = match key.code {
+            KeyCode::Esc | KeyCode::Char('q' | 'W') => {
+                self.trees = None;
+                self.mode = Mode::Normal;
+                return;
+            }
+            KeyCode::Down | KeyCode::Char('j') => 1,
+            KeyCode::Up | KeyCode::Char('k') => -1,
+            KeyCode::PageDown | KeyCode::Char(' ') => 10,
+            KeyCode::PageUp | KeyCode::Char('b') => -10,
+            KeyCode::Home | KeyCode::Char('g') => -(1 << 30),
+            KeyCode::End | KeyCode::Char('G') => 1 << 30,
+            KeyCode::Char('n') => {
+                self.open_input(InputKind::Worktree);
+                return;
+            }
+            KeyCode::Char('p') => {
+                self.run_ops(vec![(main, Op::PruneWorktrees)]);
+                return;
+            }
+            KeyCode::Char('U') => {
+                self.ask("initialise and update every submodule?".to_string(), vec![(main, Op::UpdateSubmodule(String::new()))]);
+                return;
+            }
+            KeyCode::Enter => {
+                match picked {
+                    Some((path, _, _, false)) => self.jump_to_repo(&PathBuf::from(path)),
+                    Some(_) => self.log(Level::Info, "submodules are not listed on the dashboard; press u to update one"),
+                    None => {}
+                }
+                return;
+            }
+            KeyCode::Char('u') => {
+                match picked {
+                    Some((path, _, _, true)) => self.run_ops(vec![(main, Op::UpdateSubmodule(path))]),
+                    Some(_) => self.log(Level::Warn, "u updates a submodule; the highlighted row is a worktree"),
+                    None => {}
+                }
+                return;
+            }
+            KeyCode::Char(c @ ('d' | 'D')) => {
+                match picked {
+                    Some((path, locked, false, false)) => {
+                        if locked {
+                            self.log(Level::Warn, "that worktree is locked; unlock it with git worktree unlock first");
+                        } else {
+                            let force = c == 'D';
+                            let how = if force { "REMOVE worktree (and its uncommitted changes)" } else { "remove worktree" };
+                            self.ask(format!("{how} {path}?"), vec![(main, Op::RemoveWorktree { path: PathBuf::from(path), force })]);
+                        }
+                    }
+                    Some((_, _, true, _)) => self.log(Level::Warn, "the main worktree is the repository itself and cannot be removed"),
+                    Some(_) => self.log(Level::Warn, "submodules are not removed from here"),
+                    None => {}
+                }
+                return;
+            }
+            _ => return,
+        };
+        v.state.select(step(v.state.selected(), len, delta));
+    }
+
+    /// Closes the open lists and selects `path` on the dashboard, when it is a listed repository.
+    fn jump_to_repo(&mut self, path: &Path) {
+        let known = self.repos.iter().any(|r| r.path == path);
+        if !known {
+            self.log(Level::Warn, format!("{} is not in the repository list (rescan with R, or add its folder as a root)", path.display()));
+            return;
+        }
+        self.trees = None;
+        self.mode = Mode::Normal;
+        self.filter = Filter::All;
+        self.search.clear();
+        self.show_hidden = true;
+        self.rebuild();
+        if let Some(i) = self.visible.iter().position(|&r| self.repos[r].path == path) {
+            self.repo_state.select(Some(i));
+            self.file_state.select(None);
+            self.clamp_files();
+        }
+    }
+
+    /// Creates a worktree for `branch` in a folder next to the repository, named `<repo>-<branch>`.
+    fn add_worktree(&mut self, branch: &str) {
+        let Some(v) = self.trees.as_ref() else { return };
+        if branch.is_empty() {
+            self.log(Level::Warn, "empty branch name, no worktree created");
+            return;
+        }
+        let main = v.main();
+        let base = main.file_name().map_or_else(|| "repo".to_string(), |n| n.to_string_lossy().into_owned());
+        let path = main.parent().unwrap_or(Path::new(".")).join(format!("{base}-{}", branch.replace('/', "-")));
+        if path.exists() {
+            self.log(Level::Warn, format!("{} already exists", path.display()));
+            return;
+        }
+        self.log(Level::Info, format!("adding worktree {}", path.display()));
+        self.run_ops(vec![(main, Op::AddWorktree { path, branch: branch.to_string() })]);
     }
 
     // ---- commit helpers ----
@@ -1836,7 +2008,7 @@ impl App {
 
     fn open_input(&mut self, kind: InputKind) {
         self.input = if kind == InputKind::Search { self.search.clone() } else { String::new() };
-        self.input_back = if matches!(self.mode, Mode::Branches | Mode::Finder) { self.mode } else { Mode::Normal };
+        self.input_back = if matches!(self.mode, Mode::Branches | Mode::Finder | Mode::Trees) { self.mode } else { Mode::Normal };
         self.mode = Mode::Input(kind);
     }
 
@@ -1876,6 +2048,7 @@ impl App {
                 self.op_selected(Op::Commit(text));
             }
             InputKind::Amend => self.op_selected(Op::Amend(text)),
+            InputKind::Worktree => self.add_worktree(&text),
             InputKind::Merge => self.op_selected(Op::Merge(text)),
         }
     }
