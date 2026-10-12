@@ -29,6 +29,7 @@ All notable changes to Oxide are recorded here, newest version first.
 - Add GitHub integration through the `gh` CLI: `i` and `y` list a repository's issues and pull requests (state filter, labels, branches, draft and review marks), `o` opens an item and `B` the repository in the browser.
 - Add reading of GitHub issues and pull requests (`Enter` in the list): description and comments as scrollable text, pull request diffs in the diff viewer (`d`), and `c` to check a pull request's branch out after a confirmation.
 - Add GitHub repository search and cloning (`S`): search all of GitHub or list your own repositories, clone the chosen one with `gh` into `clone_dir` (or any folder), and jump to repositories that are already cloned.
+- Add the GitHub actions (issues, pull requests, open in the browser, find and clone) to the command palette.
 - Add bulk pull (`L`) and bulk push (`U`, asks for confirmation) for the repositories in view.
 
 ### Fixed

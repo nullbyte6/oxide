@@ -24,6 +24,10 @@ pub const ENTRIES: &[Entry] = &[
     e("Show the commit log", "v", 'v'),
     e("Manage branches", "b", 'b'),
     e("Merge a branch into the current one", "m", 'm'),
+    e("GitHub issues of this repository", "i", 'i'),
+    e("GitHub pull requests of this repository", "y", 'y'),
+    e("Open this repository on GitHub in the browser", "B", 'B'),
+    e("Find and clone GitHub repositories", "S", 'S'),
     e("Pull (fast-forward only)", "p", 'p'),
     e("Push", "P", 'P'),
     e("Fetch this repository", "F", 'F'),
@@ -82,6 +86,11 @@ fn fuzzy(q: &[char], text: &str) -> Option<(i32, Vec<usize>)> {
         at.push(pos);
         from = pos + 1;
     }
+    // A query that appears as a whole word ("clone" in "clone GitHub", not in "cloned") ranks first.
+    let lower: Vec<char> = chars.iter().flat_map(|c| c.to_lowercase()).collect();
+    let whole_word = lower.windows(q.len()).enumerate().any(|(i, w)| {
+        w == q && (i == 0 || !lower[i - 1].is_alphanumeric()) && lower.get(i + q.len()).is_none_or(|c| !c.is_alphanumeric())
+    });
     // Prefer matches that start early and entries with shorter names.
-    Some((score * 4 - at.first().map_or(0, |&p| p as i32) - chars.len() as i32 / 8, at))
+    Some((score * 4 + if whole_word { 60 } else { 0 } - at.first().map_or(0, |&p| p as i32) - chars.len() as i32 / 8, at))
 }
