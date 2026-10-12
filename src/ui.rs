@@ -66,6 +66,9 @@ const KEYCAP: Style = PLAIN.add_modifier(Modifier::REVERSED);
 const GAP_X: u16 = 1;
 const GAP_Y: u16 = 0;
 
+/// Empty rows between the banner and the header, so the logo has room to breathe.
+const BANNER_GAP: u16 = 1;
+
 /// Inner side padding of every panel (same cell-ratio reasoning: the sides get a column of
 /// padding to match the one-row borders on top and bottom).
 const SIDE_PAD: u16 = 1;
@@ -82,8 +85,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     let banner = banner::get();
     let banner_h = banner.lines.len() as u16;
-    if banner_h > 0 && f.area().height >= banner_h + GAP_Y + MIN_DASHBOARD_ROWS && f.area().width >= banner.width {
-        let [banner_area, rest] = Layout::vertical([Constraint::Length(banner_h), Constraint::Min(0)]).spacing(GAP_Y).areas(area);
+    if banner_h > 0 && f.area().height >= banner_h + BANNER_GAP + MIN_DASHBOARD_ROWS && f.area().width >= banner.width {
+        let [banner_area, rest] = Layout::vertical([Constraint::Length(banner_h), Constraint::Min(0)]).spacing(BANNER_GAP).areas(area);
         // Center the art as one block so its lines stay aligned with each other.
         let [_, art, _] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(banner.width), Constraint::Fill(1)]).areas(banner_area);
         f.render_widget(Paragraph::new(banner.lines.clone()).style(hue(BOLD, ACCENT)), art);

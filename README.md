@@ -230,7 +230,7 @@ stays plain inverse.
 
 To recolor the base, change `INK` in [`src/ui.rs`](src/ui.rs) (the default is the terminal's
 own foreground); the accent hues are the `ACCENT`, `GOOD`, `WARN`, `BAD`, `INFO` and `PINK` constants
-next to it. `GAP_X`, `GAP_Y` and `SIDE_PAD` tune the gaps and the inner side padding of panels. The
+next to it. `GAP_X`, `GAP_Y`, `BANNER_GAP` and `SIDE_PAD` tune the gaps (`BANNER_GAP` is the empty row under the banner) and the inner side padding of panels. The
 banner is bold ink, or bold accent color with colors on.
 
 ## Owned vs cloned
