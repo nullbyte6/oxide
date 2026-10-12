@@ -101,6 +101,7 @@ oxide [OPTIONS] [PATH...]
 | `m` | Merge a branch into the current one (empty input merges the upstream) |
 | `r` / `R` | Reload the selected repository / rescan all roots |
 | `:` / `Ctrl+P` | Command palette: starts empty, type a few letters of any action (GitHub ones included: `clone`, `issues`, `browser` ...) (fuzzy matched), `↑` `↓` pick, `Enter` runs it, `Esc` clears the query and a second `Esc` closes it |
+| `l` | Hide / show the log panel. While it is hidden, each new log message takes the bottom row for a few seconds so results and errors are not missed |
 | `h` | Hide / show the key bar at the bottom (the row goes back to the panels; prompts still use it) |
 | `?` | Help |
 | `q`, `Ctrl+C` | Quit |
@@ -262,6 +263,9 @@ color = on
 
 # start with the key bar at the bottom visible (on) or hidden (off); the h key toggles it
 hints = on
+
+# start with the log panel visible (on) or hidden (off); the l key toggles it
+logs = on
 
 # folder that GitHub repositories are cloned into by default (home directory when unset)
 clone_dir = ~/dev

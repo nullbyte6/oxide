@@ -54,6 +54,7 @@ pub const ENTRIES: &[Entry] = &[
     e("Rescan all roots", "R", 'R'),
     e("Toggle colors", "C", 'C'),
     e("Show or hide the key bar", "h", 'h'),
+    e("Show or hide the log panel", "l", 'l'),
     e("Show the key help", "?", '?'),
     e("Quit", "q", 'q'),
 ];

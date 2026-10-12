@@ -31,6 +31,7 @@ All notable changes to Oxide are recorded here, newest version first.
 - Add GitHub repository search and cloning (`S`): search all of GitHub or list your own repositories, clone the chosen one with `gh` into `clone_dir` (or any folder), and jump to repositories that are already cloned.
 - Add the GitHub actions (issues, pull requests, open in the browser, find and clone) to the command palette.
 - Add repository deletion from disk (`D`), guarded by a prompt that lists what would be lost and requires typing the repository's name, and by refusals for symlinks, worktrees, submodules and the home directory.
+- Add `l` to hide and show the log panel (`logs = off` in the config starts it hidden); while hidden, new log messages appear briefly in the bottom row.
 - Add bulk pull (`L`) and bulk push (`U`, asks for confirmation) for the repositories in view.
 
 ### Fixed

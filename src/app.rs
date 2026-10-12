@@ -26,6 +26,9 @@ use crate::{
     worker::{self, Msg},
 };
 
+/// How many event-loop iterations (about 100 ms each) a message stays up while the log panel is hidden.
+const TOAST_TICKS: usize = 40;
+
 /// Number of log entries kept for the in-app log panel.
 const LOG_LINES: usize = 500;
 
@@ -327,6 +330,10 @@ pub struct App {
     pub color: bool,
     /// The key bar at the bottom is visible (toggled with `h`).
     pub hints: bool,
+    /// The log panel is visible (toggled with `l`).
+    pub logs: bool,
+    /// The `tick` at which the newest log line was added, for the short message shown while logs are hidden.
+    log_tick: usize,
     /// The command palette's query and selection.
     pub palette: Palette,
     pub search: String,
@@ -375,7 +382,7 @@ fn step(cur: Option<usize>, len: usize, delta: isize) -> Option<usize> {
 impl App {
     pub fn new(cfg: Config) -> App {
         let (tx, rx) = mpsc::channel();
-        let (color, hints) = (cfg.color, cfg.hints);
+        let (color, hints, logs) = (cfg.color, cfg.hints, cfg.logs);
         App {
             marks: Marks::load(&cfg),
             cfg: Arc::new(cfg),
@@ -390,6 +397,8 @@ impl App {
             show_hidden: false,
             color,
             hints,
+            logs,
+            log_tick: 0,
             palette: Palette::default(),
             search: String::new(),
             input: String::new(),
@@ -421,9 +430,18 @@ impl App {
         let text = text.into();
         self.logger.write(level, &text);
         self.log.push(LogLine { time: logger::clock(), level, text });
+        self.log_tick = self.tick;
         if self.log.len() > LOG_LINES {
             self.log.remove(0);
         }
+    }
+
+    /// The newest log line while it is fresh and the log panel is hidden, so results are not missed.
+    pub fn toast(&self) -> Option<&LogLine> {
+        if self.logs || self.tick.wrapping_sub(self.log_tick) >= TOAST_TICKS {
+            return None;
+        }
+        self.log.last()
     }
 
     pub fn selected(&self) -> Option<&Repo> {
@@ -682,6 +700,7 @@ impl App {
             KeyCode::Right => self.focus = Focus::Files,
             KeyCode::Left => self.focus = Focus::Repos,
             KeyCode::Char('h') => self.hints = !self.hints,
+            KeyCode::Char('l') => self.logs = !self.logs,
             KeyCode::Char(':') => self.open_palette(),
             KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => self.open_palette(),
             KeyCode::Down | KeyCode::Char('j') => self.move_sel(1),

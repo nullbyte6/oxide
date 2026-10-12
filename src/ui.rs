@@ -91,14 +91,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 
     let [header, body, log] =
-        Layout::vertical([Constraint::Length(3), Constraint::Min(8), Constraint::Length(8)]).spacing(GAP_Y).areas(area);
+        Layout::vertical([Constraint::Length(3), Constraint::Min(8), Constraint::Length(if app.logs { 8 } else { 0 })]).spacing(GAP_Y).areas(area);
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(54), Constraint::Fill(1)]).spacing(GAP_X).areas(body);
 
     draw_header(f, app, header);
     draw_repos(f, app, left);
     draw_details(f, app, right);
-    draw_log(f, app, log);
+    if app.logs {
+        draw_log(f, app, log);
+    }
     draw_footer(f, app, footer);
     // A pending confirmation is drawn on top of the view it was asked from.
     let view = match (app.mode, &app.confirm) {
@@ -415,12 +417,26 @@ fn draw_log(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(lines).block(pane(format!(" Log ({}) ", logger::zone_name()), false)), area);
 }
 
-/// The bottom row shows the key bar unless `h` hid it. Prompts (text input, confirmations) always need it.
+/// The bottom row shows the key bar unless `h` hid it. Prompts (text input, confirmations) always need it,
+/// and so does a message that is shown for a moment while the log panel is hidden.
 fn footer_height(app: &App) -> u16 {
-    u16::from(app.hints || matches!(app.mode, Mode::Input(_) | Mode::Confirm))
+    u16::from(app.hints || app.toast().is_some() || matches!(app.mode, Mode::Input(_) | Mode::Confirm))
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
+    // With the log panel hidden, a new log message takes the key bar's place for a few seconds.
+    if let (Some(l), Mode::Normal) = (app.toast(), app.mode) {
+        let (sym, style) = match l.level {
+            Level::Info => ("  ", DIM),
+            Level::Ok => ("✓ ", hue(PLAIN, GOOD)),
+            Level::Warn => ("! ", hue(BOLD, WARN)),
+            Level::Error => ("✗ ", hue(BOLD, BAD)),
+        };
+        let line = Line::from(vec![Span::styled(format!(" {} ", l.time), DIM), Span::styled(sym, style), Span::styled(l.text.trim().to_string(), style)]);
+        f.render_widget(Paragraph::new(line), area);
+        return;
+    }
+
     if let Mode::Input(kind) = app.mode {
         let prompt = match kind {
             InputKind::Commit => format!("commit message → {}", app.selected().map_or("", |r| r.name.as_str())),
@@ -431,12 +447,10 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             InputKind::GhSearch => "search GitHub repositories (empty = yours)".to_string(),
             InputKind::CloneTo => "clone into".to_string(),
             InputKind::DeleteRepo => app.selected().map_or_else(String::new, |r| {
-                {
                 // `~` instead of the home directory keeps the part that matters on screen.
                 let home = crate::config::home();
                 let path = r.path.strip_prefix(&home).map_or_else(|_| r.path.display().to_string(), |p| format!("~/{}", p.display()));
                 format!("DELETE {path} from disk ({}). Type \"{}\"", r.risk_summary(), r.name)
-            }
             }),
         };
         let line = Line::from(vec![
@@ -923,7 +937,7 @@ fn draw_help(f: &mut Frame) {
         ("* / x / H", "pin / ignore the repository / show ignored ones"),
         ("r / R", "reload selected repository / rescan all roots"),
         (": / Ctrl+P", "command palette: type to find any action, Enter runs it"),
-        ("h / C", "hide or show this key bar / toggle colors"),
+        ("h l C", "hide the key bar / hide the log panel / toggle colors"),
         ("? / q", "this help (any key closes it) / quit"),
         ("↑n ↓n ★ ⊘", "ahead · behind · pinned · ignored"),
         ("+ ~ ? ! $", "staged · modified · untracked · conflicts · stashes"),
