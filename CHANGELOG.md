@@ -41,6 +41,7 @@ All notable changes to Oxide are recorded here, newest version first.
 - Add a reflog view (`O`) with one-key undo (`u`: checkouts go back to the previous branch, other entries move the branch back with `git reset --keep`), `Enter` to move the branch to an entry and `d` to show its commit; every action asks for confirmation.
 - Add commit helpers: `Tab` cycles conventional-commit types in the commit and amend prompts, the first line of `commit.template` prefills the prompt, up to 12 lines of hook output are logged, a rejected commit's message is restored on the next try, and an `email` config option (else the global `user.email`) drives an identity warning next to the prompt.
 - Add a worktree and submodule view (`W`): list both with their state, add a worktree for a branch next to the repository, remove one (with a force option), prune stale ones, and update one or all submodules; a new worktree joins the repository list and a removed one leaves it.
+- Add `config.lua`: the config file is now a Lua script (embedded Lua 5.4 through `mlua`, vendored) that sets globals or returns a table; lists are Lua tables, flags are booleans and `autofetch` is `"10m"` or `false`. The old `~/.config/oxide/config` (`key = value`) is no longer read. A script error or a wrong-typed option is logged and the defaults apply.
 
 ### Fixed
 - Fix the key bar losing its last keys on narrow terminals: hints are now dropped from the middle by importance, always keeping `h`, `?` and `q`.

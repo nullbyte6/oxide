@@ -32,6 +32,7 @@ screen, and lets you stage, commit, push, pull, fetch and merge without leaving 
 - **Non-blocking**: scans and git commands run on background threads; the UI never freezes.
 - **Search**: filter the list live by name, branch or path.
 - **Logs**: an in-app log panel plus a persistent log file.
+- **Lua config**: `~/.config/oxide/config.lua` is a real Lua script, so the configuration can use variables, lists and logic.
 - **Only needs `git`**: Oxide drives the `git` CLI, so it behaves exactly like your own git setup.
 
 ## Requirements
@@ -60,7 +61,7 @@ oxide
 ```
 oxide [OPTIONS] [PATH...]
 
-  PATH...        directories to scan (default: config roots, else every mounted drive)
+  PATH...        directories to scan (default: `root` of config.lua, else every mounted drive)
       --list     print the repository table to stdout and exit (no TUI)
   -h, --help     show help
   -V, --version  show the version
@@ -164,7 +165,7 @@ In the commit (`c`) and amend (`E`) prompts:
 - Pre-commit and commit-msg hook output is shown in the log (up to 12 lines). When a hook rejects the commit, the
   message you typed is restored in the next commit prompt instead of being lost.
 - A warning appears next to the prompt when the repository would commit with an e-mail other than the expected one:
-  the `email` entries of the config file, or your global `user.email` without any. It also warns when no `user.email` is set.
+  the `email` option of `config.lua`, or your global `user.email` without any. It also warns when no `user.email` is set.
 
 Amending a commit that is already pushed logs a reminder that publishing it needs a force push.
 
@@ -192,7 +193,7 @@ write; operations started from Oxide reload it anyway. Only one working tree is 
 below the kernel's watch limit (`fs.inotify.max_user_watches`); `node_modules`, `target`, `venv` and other
 cache folders are skipped. If the watches cannot be set up the log says so and `r` still reloads by hand.
 
-**Auto-fetch.** With `autofetch = 10m` in the config every listed repository that has a remote is fetched
+**Auto-fetch.** With `autofetch = "10m"` in `config.lua` every listed repository that has a remote is fetched
 (`--all --prune`) on that interval, silently: only the first failure of a round is logged. The header shows `⟳ 10m`
 while it is on. It is off by default.
 
@@ -200,7 +201,7 @@ while it is on. It is off by default.
 list`) for the newest workflow run of each branch in view that lives on github.com (at most 100 repositories
 per round). The row shows `✓` passing, `✗` failing, a spinner while queued or running and `○` for cancelled or
 skipped runs, and the details pane names the state. If `gh` is missing or not logged in, the log says so once
-and automatic refreshes stop until you press `w`; `ci = off` in the config disables the automatic ones.
+and automatic refreshes stop until you press `w`; `ci = false` in `config.lua` disables the automatic ones.
 
 ### Commit log
 
@@ -293,7 +294,7 @@ layer** of accent hues (ANSI colors, so they follow your terminal theme): cyan f
 and the logo, green for owned/ahead/staged, yellow for modified and warnings, red for behind,
 conflicts and errors, blue for untracked files, magenta for running operations and stashes. Every
 colored element keeps the weight and symbol it has without color, so nothing depends on hue.
-Press `C` to toggle colors, set `color = off` in the config, or export `NO_COLOR`. The selected row
+Press `C` to toggle colors, set `color = false` in `config.lua`, or export `NO_COLOR`. The selected row
 stays plain inverse.
 
 - **Spacing**: side-by-side panels are 1 empty column apart and stacked panels touch (no empty
@@ -319,53 +320,56 @@ A repository is **owned** when any of these is true:
 - the account in its remote URL (`github.com/<account>/repo`) matches one of your owner names.
 
 Everything else is **cloned**. Your owner names are your global git `user.name` and
-`github.user`, plus any `owner` entries in the config file.
+`github.user`, plus any `owner` entries in `config.lua`.
 
 ## Configuration
 
-Optional file: `~/.config/oxide/config` (or `$XDG_CONFIG_HOME/oxide/config`).
+Optional file: `~/.config/oxide/config.lua` (or `$XDG_CONFIG_HOME/oxide/config.lua`). It is a plain Lua script
+(Lua 5.4, built into Oxide): set the options below as global variables, or `return` a table with them. Strings
+take `~`, lists are Lua tables, and anything else Lua can do (`os.getenv`, conditionals ...) works too. If the
+file fails to run or an option has the wrong type, Oxide ignores it, uses the defaults and says why in the log
+(and on stderr with `--list`).
 
-```
-# directories to scan (repeatable); without any root, every mounted drive is scanned
-root = ~/dev
-root = /mnt/backup
+```lua
+-- directories to scan; without any root, every mounted drive is scanned
+root = { "~/dev", "/mnt/backup" }
 
-# extra account names that count as "owned" (repeatable)
-owner = my-company
+-- extra account names that count as "owned" (a string or a list)
+owner = { "my-company" }
 
-# how many directory levels below each root are searched
+-- how many directory levels below each root are searched
 depth = 6
 
-# accent colors on top of the monochrome design (on or off; off by default when NO_COLOR is set)
-color = on
+-- accent colors on top of the monochrome design (false by default when NO_COLOR is set)
+color = true
 
-# start with the key bar at the bottom visible (on) or hidden (off); the h key toggles it
-hints = on
+-- start with the key bar at the bottom visible; the h key toggles it
+hints = true
 
-# start with the log panel visible (on) or hidden (off); the l key toggles it
-logs = on
+-- start with the log panel visible; the l key toggles it
+logs = true
 
-# e-mail addresses commits should be made with (repeatable); a warning shows in the commit prompt for any other.
-# Without entries the global user.email is the expected one.
-email = me@example.com
+-- e-mail addresses commits should be made with; a warning shows in the commit prompt for any other.
+-- Without entries the global user.email is the expected one.
+email = "me@example.com"
 
-# fetch every repository on this interval (30s, 10m, 1h; a bare number is minutes; off by default)
-autofetch = 10m
+-- fetch every repository on this interval: "30s", "10m", "1h" (a bare number is minutes); false = off (default)
+autofetch = "10m"
 
-# load the CI status of GitHub repositories in the background (on or off; w always refreshes it)
-ci = on
+-- load the CI status of GitHub repositories in the background (w always refreshes it)
+ci = true
 
-# folder that GitHub repositories are cloned into by default (home directory when unset)
-clone_dir = ~/dev
+-- folder that GitHub repositories are cloned into by default (home directory when unset)
+clone_dir = "~/dev"
 
-# repositories listed first / hidden: a directory name, or a path (a value with a "/" or a leading "~"
-# also covers every repository below it)
-pin = oxide
-ignore = ~/dev/vendor
+-- repositories listed first / hidden: a directory name, or a path (a value with a "/" or a leading "~"
+-- also covers every repository below it)
+pin = { "oxide" }
+ignore = { "~/dev/vendor" }
 ```
 
 The `*` and `x` keys store their marks in `~/.local/state/oxide/marks` (or `$XDG_STATE_HOME/oxide/marks`),
-so the config file is never rewritten. A mark that comes from the config file can only be removed there.
+so `config.lua` is never rewritten. A mark that comes from `config.lua` can only be removed there.
 
 ## What gets scanned
 
@@ -375,7 +379,7 @@ its own root and a scan never crosses onto another filesystem, so nothing is vis
 Skipped: `/boot`, snap and squashfs images, network mounts, and the system directories
 `/proc`, `/sys`, `/dev`, `/run`, `/usr` (only directly under `/`).
 
-`root` entries in the config file, or paths on the command line, replace this automatic
+`root` in `config.lua`, or paths on the command line, replace this automatic
 list; use them to scan only part of the machine or a drive that is not mounted via a block device.
 Hidden directories, `node_modules`, `target`, `venv`, `__pycache__`, `snap` and the Windows
 `$RECYCLE.BIN` / `System Volume Information` folders are always skipped, and a repository's
@@ -419,9 +423,9 @@ run in batch mode unless you set `core.sshCommand`, `GIT_SSH_COMMAND` or `GIT_SS
 | `src/watch.rs` | inotify file watching of `.git` directories and the selected working tree |
 | `src/repo.rs` | Repository model, discovery, owned/cloned classification |
 | `src/worker.rs` | Background scan and operation threads |
-| `src/config.rs` | Config file, roots and owner names |
+| `src/config.rs` | `config.lua` (run with embedded Lua), roots and owner names |
 | `src/palette.rs` | Command palette entries and fuzzy matcher |
-| `src/marks.rs` | Pinned and ignored repositories (config entries and state file) |
+| `src/marks.rs` | Pinned and ignored repositories (`config.lua` and state file) |
 | `src/logger.rs` | Persistent log file |
 | `src/banner.rs` | Turns `src/banner.txt` into Ratatui lines |
 | `src/banner.txt` | The ASCII banner art shown on top of the dashboard |
