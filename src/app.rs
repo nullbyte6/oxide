@@ -159,6 +159,8 @@ pub struct DiffView {
     pub kind: DiffKind,
     /// None while the diff is loading.
     pub diff: Option<Diff>,
+    /// The diff text as git printed it, kept to cut single hunks out of it for staging.
+    raw: String,
     pub error: Option<String>,
     /// First visible row, and how many columns the code is scrolled to the left.
     pub scroll: usize,
@@ -170,6 +172,19 @@ pub struct DiffView {
     /// The mode to return to when the viewer closes (the dashboard, or the commit log).
     back: Mode,
     id: u64,
+}
+
+impl DiffView {
+    /// Index of the hunk the top row belongs to (the first one above the first hunk header).
+    pub fn hunk(&self) -> Option<usize> {
+        let hunks = &self.diff.as_ref()?.hunks;
+        (!hunks.is_empty()).then(|| hunks.iter().rposition(|&h| h <= self.scroll).unwrap_or(0))
+    }
+
+    /// True for the file diffs whose hunks can be staged or unstaged.
+    pub fn stageable(&self) -> bool {
+        matches!(self.kind, DiffKind::Staged | DiffKind::Unstaged)
+    }
 }
 
 /// The commit log of one repository.
@@ -502,6 +517,7 @@ impl App {
                         *done += 1;
                     }
                     let path = repo.path.clone();
+                    self.follow_diff(&repo);
                     match self.repos.iter_mut().find(|r| r.path == path) {
                         Some(slot) => *slot = repo,
                         None => self.repos.push(repo),
@@ -591,7 +607,10 @@ impl App {
                 Msg::Diff { id, result } => {
                     if let Some(view) = self.diff.as_mut().filter(|v| v.id == id) {
                         match result {
-                            Ok(text) => view.diff = Some(diff::parse(&text, &view.file)),
+                            Ok(text) => {
+                                view.diff = Some(diff::parse(&text, &view.file));
+                                view.raw = text;
+                            }
                             Err(e) => view.error = Some(e),
                         }
                     }
@@ -600,6 +619,9 @@ impl App {
                     self.busy.remove(&path);
                     if self.branches.as_ref().is_some_and(|v| v.repo == path) {
                         self.load_branches(); // switching, creating or deleting changed the list
+                    }
+                    if result.is_ok() && label.ends_with("hunk") {
+                        self.reload_diff(&path);
                     }
                     let name = dir_name(&path);
                     match result {
@@ -799,6 +821,7 @@ impl App {
             file: target.clone(),
             kind,
             diff: None,
+            raw: String::new(),
             error: None,
             scroll: 0,
             hscroll: 0,
@@ -1266,7 +1289,48 @@ impl App {
                     worker::spawn_diff(v.repo.clone(), v.file.clone(), v.kind, v.id, self.tx.clone());
                 }
             }
+            // Stage the hunk at the top of the screen (unstaged view), or unstage it (staged view).
+            KeyCode::Char('s') => {
+                if !v.stageable() {
+                    self.log(Level::Warn, "only the staged or unstaged diff of a file has hunks to stage");
+                    return;
+                }
+                let reverse = v.kind == DiffKind::Staged;
+                let picked = v.hunk().and_then(|k| diff::hunk_patch(&v.raw, k)).map(|patch| (v.repo.clone(), patch));
+                match picked {
+                    Some((repo, patch)) => self.run_ops(vec![(repo, Op::Hunk { patch, reverse })]),
+                    None => self.log(Level::Warn, "no hunk to stage here"),
+                }
+            }
             _ => {}
+        }
+    }
+
+    /// Loads the open diff again (after a hunk was staged or unstaged), keeping the scroll position.
+    fn reload_diff(&mut self, repo: &Path) {
+        self.diff_id += 1;
+        if let Some(v) = self.diff.as_mut().filter(|v| v.repo == repo) {
+            v.id = self.diff_id;
+            worker::spawn_diff(v.repo.clone(), v.file.clone(), v.kind, v.id, self.tx.clone());
+        }
+    }
+
+    /// Keeps an open staged/unstaged diff pointing at a version of the file that still has changes:
+    /// once its last hunk moved to the other side, the viewer follows it.
+    fn follow_diff(&mut self, repo: &Repo) {
+        let Some(v) = self.diff.as_mut().filter(|v| v.repo == repo.path && v.stageable()) else { return };
+        let Some(f) = repo.files.iter().find(|f| f.path == v.file) else { return };
+        v.both = f.staged() && f.unstaged() && !f.conflict();
+        let wanted = if v.kind == DiffKind::Unstaged && !f.unstaged() && f.staged() {
+            Some(DiffKind::Staged)
+        } else if v.kind == DiffKind::Staged && !f.staged() && f.unstaged() {
+            Some(DiffKind::Unstaged)
+        } else {
+            None
+        };
+        if let Some(kind) = wanted {
+            v.kind = kind;
+            self.reload_diff(&repo.path);
         }
     }
 

@@ -468,6 +468,9 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     if app.mode == Mode::Diff {
         let both = app.diff.as_ref().is_some_and(|v| v.both);
         let mut hints = vec![("↑↓", "scroll"), ("Space", "page"), ("[ ]", "hunk"), ("← →", "pan"), ("g G", "top/end")];
+        if let Some(v) = app.diff.as_ref().filter(|v| v.stageable()) {
+            hints.push(("s", if v.kind == DiffKind::Staged { "unstage hunk" } else { "stage hunk" }));
+        }
         if both {
             hints.push(("Tab", "staged/unstaged"));
         }
@@ -584,12 +587,16 @@ fn code_spans(toks: &[(Tok, String)], mut skip: usize) -> Vec<Span<'static>> {
     spans
 }
 
-fn diff_line(row: &Row, num_w: usize, hscroll: usize) -> Line<'static> {
+/// `current` marks the hunk that `s` would stage or unstage.
+fn diff_line(row: &Row, num_w: usize, hscroll: usize, current: bool) -> Line<'static> {
     let blank = " ".repeat(num_w * 2 + 2);
     match row {
         Row::Meta(s) | Row::Note(s) => Line::from(Span::styled(format!("{blank}{s}"), DIM.add_modifier(Modifier::ITALIC))),
         Row::File(s) => Line::from(vec![Span::styled(format!("{} ", "━".repeat(num_w * 2 + 2)), DIM), Span::styled(s.clone(), hue(BOLD, WARN))]),
-        Row::Hunk(s) => Line::from(Span::styled(format!("{blank}{s}"), hue(BOLD, ACCENT))),
+        Row::Hunk(s) => {
+            let pad = if current { format!("{}▸ ", &blank[..blank.len() - 2]) } else { blank };
+            Line::from(Span::styled(format!("{pad}{s}"), hue(BOLD, ACCENT)))
+        }
         Row::Line { sign, old, new, toks } => {
             let num = |n: &Option<u32>| n.map_or_else(|| " ".repeat(num_w), |n| format!("{n:>num_w$}"));
             let (mark, style) = match sign {
@@ -635,15 +642,22 @@ fn draw_diff(f: &mut Frame, app: &mut App) {
 
     v.scroll = v.scroll.min(d.rows.len().saturating_sub(v.height));
     let last = (v.scroll + v.height).min(d.rows.len());
+    let hunk = v.hunk();
+    let hunk_label = match hunk {
+        Some(k) if v.stageable() => format!(" · hunk {}/{}", k + 1, d.hunks.len()),
+        _ => String::new(),
+    };
+    let marked = if v.stageable() { hunk.map(|k| d.hunks[k]) } else { None };
     block = block.title_top(
         Line::from(vec![
             Span::styled(format!(" +{}", d.added), hue(BOLD, GOOD)),
             Span::styled(format!(" −{}", d.removed), hue(BOLD, BAD)),
-            Span::styled(format!(" · {}-{last}/{} ", v.scroll + 1, d.rows.len()), DIM),
+            Span::styled(format!("{hunk_label} · {}-{last}/{} ", v.scroll + 1, d.rows.len()), DIM),
         ])
         .right_aligned(),
     );
-    let mut lines: Vec<Line> = d.rows[v.scroll..last].iter().map(|r| diff_line(r, d.num_w, v.hscroll)).collect();
+    let mut lines: Vec<Line> =
+        d.rows[v.scroll..last].iter().enumerate().map(|(k, r)| diff_line(r, d.num_w, v.hscroll, marked == Some(v.scroll + k))).collect();
     if d.truncated && last == d.rows.len() {
         lines.push(Line::from(Span::styled("… diff cut off after the first rows", DIM.add_modifier(Modifier::ITALIC))));
     }

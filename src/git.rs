@@ -73,6 +73,8 @@ pub enum Op {
     Clone(String),
     /// Delete the repository's folder from disk.
     Delete,
+    /// Apply one hunk of a diff to the index: stage it, or with `reverse` unstage it.
+    Hunk { patch: String, reverse: bool },
 }
 
 impl Op {
@@ -96,6 +98,8 @@ impl Op {
             Op::CheckoutPr(_) => "pr checkout",
             Op::Clone(_) => "clone",
             Op::Delete => "delete",
+            Op::Hunk { reverse: false, .. } => "stage hunk",
+            Op::Hunk { reverse: true, .. } => "unstage hunk",
         }
     }
 }
@@ -403,8 +407,36 @@ pub fn perform(repo: &Path, op: &Op) -> Result<String, String> {
         Op::Clone(_) if repo.read_dir().is_ok_and(|mut d| d.next().is_some()) => Err(format!("{} already exists and is not empty", repo.display())),
         Op::Clone(slug) => crate::github::clone(slug, repo),
         Op::Delete => delete_repo(repo),
+        Op::Hunk { patch, reverse } => apply_cached(repo, patch, *reverse),
         Op::DeleteBranch(name, force) => run_all(repo, &["branch", if *force { "-D" } else { "-d" }, "--", name]),
     }
+}
+
+/// Applies `patch` (a single-file unified diff, fed through stdin) to the index only. `--recount` lets git
+/// trust the hunk body over its header counts; `reverse` undoes a patch that is already in the index.
+fn apply_cached(repo: &Path, patch: &str, reverse: bool) -> Result<String, String> {
+    use std::io::Write;
+    let mut args = vec!["apply", "--cached", "--recount", "--whitespace=nowarn"];
+    if reverse {
+        args.push("-R");
+    }
+    args.push("-");
+    let mut child = command()
+        .arg("-C")
+        .arg(repo)
+        .args(&args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("cannot run git: {e}"))?;
+    // Dropping the handle closes stdin, which tells git the patch is complete.
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(patch.as_bytes()).map_err(|e| format!("cannot send the patch to git: {e}"))?;
+    }
+    let out = child.wait_with_output().map_err(|e| format!("cannot run git: {e}"))?;
+    let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    if out.status.success() { Ok(err) } else { Err(err) }
 }
 
 /// Removes a repository's folder from disk. Besides the prompt in the UI, this refuses anything that is

@@ -202,7 +202,11 @@ differs: bold keywords and dim italic comments.
 | `]` / `[` (or `n` / `N`) | Next / previous hunk |
 | `←` `→` / `h` `l`, `0` | Pan long lines, back to the left edge |
 | `Tab` | Staged / unstaged version, when the file has both |
+| `s` | Stage the hunk at the top of the screen (unstaged version), or unstage it (staged version) |
 | `Esc`, `q`, `d` | Close |
+
+The hunk `s` acts on is marked `▸` and counted in the title (`hunk 2/5`); `[` `]` move between hunks. The
+diff reloads after each stage, and once a file has no hunks left on one side the viewer follows it to the other.
 
 Row symbols: `↑n` ahead, `↓n` behind, `+` staged, `~` modified, `?` untracked, `!` conflicts, `$n` stashes;
 `★` marks a pinned repository and `⊘` an ignored one.

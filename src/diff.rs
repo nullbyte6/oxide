@@ -52,6 +52,24 @@ fn hunk_start(header: &str) -> (u32, u32) {
     (side('-', false), side('+', true))
 }
 
+/// The patch that applies only hunk number `index` (counting from 0) of a single-file diff: the file
+/// header lines, then that hunk's lines, ready for `git apply`.
+pub fn hunk_patch(raw: &str, index: usize) -> Option<String> {
+    let (mut header, mut body) = (String::new(), String::new());
+    let mut seen = 0usize;
+    for line in raw.split_inclusive('\n') {
+        if line.starts_with("@@") {
+            seen += 1;
+        }
+        match seen {
+            0 => header.push_str(line),
+            n if n == index + 1 => body.push_str(line),
+            _ => {}
+        }
+    }
+    (!body.is_empty()).then(|| header + &body)
+}
+
 /// Parses unified diff text of one file; `file` picks the language used for highlighting.
 pub fn parse(text: &str, file: &str) -> Diff {
     let mut lang = syntax::lang_for(file);
