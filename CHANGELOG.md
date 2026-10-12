@@ -14,6 +14,9 @@ All notable changes to Oxide are recorded here, newest version first.
 - Add LICENSE (MIT) and README with usage, keys and configuration.
 - Add ASCII banner on top of the dashboard, rendered from `src/banner.sh`: its ANSI colors are converted to Ratatui styles and it is hidden on small terminals.
 
+### Fixed
+- Fix scan listing broken repositories: a `.git` that is empty or points to a removed gitdir (dangling submodule) is no longer treated as a repository.
+
 ### Changed
 - Update default scan to cover every mounted drive (internal and external) instead of only the home directory, with a default depth of 6 levels.
 - Update panel spacing: one column of inner side padding, one empty column between side-by-side panels and no empty row between stacked ones, which look equal.

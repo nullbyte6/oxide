@@ -139,7 +139,8 @@ Skipped: `/boot`, snap and squashfs images, network mounts, and the system direc
 list; use them to scan only part of the machine or a drive that is not mounted via a block device.
 Hidden directories, `node_modules`, `target`, `venv`, `__pycache__`, `snap` and the Windows
 `$RECYCLE.BIN` / `System Volume Information` folders are always skipped, and a repository's
-subdirectories are not searched for nested repositories.
+subdirectories are not searched for nested repositories. A directory only counts as a repository
+when its `.git` is usable, so dangling submodule checkouts and empty `.git` folders are ignored.
 
 ## Banner
 

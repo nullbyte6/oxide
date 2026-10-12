@@ -88,8 +88,7 @@ pub fn discover(cfg: &Config) -> Vec<PathBuf> {
 }
 
 fn walk(dir: &Path, depth: usize, dev: Option<u64>, found: &mut Vec<PathBuf>) {
-    // `.git` is a directory in normal clones and a file in worktrees and submodules.
-    if dir.join(".git").exists() {
+    if has_git_dir(dir) {
         found.push(dir.to_path_buf());
         return; // nested repositories are not searched
     }
@@ -112,6 +111,18 @@ fn walk(dir: &Path, depth: usize, dev: Option<u64>, found: &mut Vec<PathBuf>) {
         }
         walk(&entry.path(), depth - 1, dev, found);
     }
+}
+
+/// True when `dir/.git` is a usable repository. It is a directory holding `HEAD` in normal clones,
+/// and a `gitdir: <path>` file in worktrees and submodules; the target of that file must exist.
+/// Leftovers such as an empty `.git` folder or a submodule whose gitdir was removed are rejected.
+fn has_git_dir(dir: &Path) -> bool {
+    let dot_git = dir.join(".git");
+    if dot_git.is_dir() {
+        return dot_git.join("HEAD").exists();
+    }
+    let Ok(text) = fs::read_to_string(&dot_git) else { return false };
+    text.trim().strip_prefix("gitdir:").is_some_and(|target| dir.join(target.trim()).exists())
 }
 
 /// Loads the full state of the repository at `path`.
