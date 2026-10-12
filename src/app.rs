@@ -864,6 +864,12 @@ impl App {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let found = palette::matches(&self.palette.query);
         let delta = match key.code {
+            // First Esc clears what was typed, the next one closes the palette.
+            KeyCode::Esc if !self.palette.query.is_empty() => {
+                self.palette.query.clear();
+                self.palette.state.select(Some(0));
+                return;
+            }
             KeyCode::Esc => {
                 self.mode = Mode::Normal;
                 return;
