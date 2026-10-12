@@ -112,6 +112,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Branches => draw_branches(f, app),
         Mode::GitHub => draw_github(f, app),
         Mode::Text => draw_text(f, app),
+        Mode::Finder => draw_finder(f, app),
         _ => {}
     }
     if app.mode == Mode::Palette {
@@ -428,6 +429,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             InputKind::Search => "search".to_string(),
             InputKind::Branch => format!("new branch from {}", app.selected().map_or("", |r| r.branch.as_str())),
             InputKind::Init => "git init in folder (created if missing)".to_string(),
+            InputKind::GhSearch => "search GitHub repositories (empty = yours)".to_string(),
+            InputKind::CloneTo => "clone into".to_string(),
         };
         let line = Line::from(vec![
             Span::styled(format!(" {prompt} ▸ "), hue(BOLD, ACCENT)),
@@ -465,6 +468,11 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             hints.extend([("d", "diff"), ("c", "checkout")]);
         }
         hints.extend([("B", "repo in browser"), ("Esc", "close")]);
+        f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
+        return;
+    }
+    if app.mode == Mode::Finder {
+        let hints = [("↑↓", "move"), ("Enter", "clone"), ("/", "new search"), ("o", "browser"), ("r", "reload"), ("Esc", "close")];
         f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
         return;
     }
@@ -723,6 +731,57 @@ fn draw_github(f: &mut Frame, app: &mut App) {
     f.render_stateful_widget(List::new(rows).block(block).highlight_style(INVERSE), area, &mut v.list);
 }
 
+/// GitHub repository search results (or your own repositories) as a popup.
+fn draw_finder(f: &mut Frame, app: &mut App) {
+    let cloned: Vec<String> = app.repos.iter().filter_map(|r| r.slug.as_ref().map(|s| s.to_lowercase())).collect();
+    let last = app.log.last().map(|l| l.text.clone()).unwrap_or_default();
+    let Some(v) = app.finder.as_mut() else { return };
+    let rows = v.items.as_ref().map_or(1, Vec::len) as u16;
+    let area = f.area();
+    let w = 120.min(area.width);
+    let h = (rows + 2).clamp(5, area.height.saturating_sub(2).max(5)).min(area.height);
+    let [_, mid, _] = Layout::vertical([Constraint::Fill(1), Constraint::Length(h), Constraint::Fill(1)]).areas(area);
+    let [_, popup, _] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(w), Constraint::Fill(1)]).areas(mid);
+    f.render_widget(Clear, popup);
+    let what = if v.query.is_empty() { "your repositories".to_string() } else { format!("“{}”", v.query) };
+    let count = v.items.as_ref().map_or(String::new(), |i| format!(" ({})", i.len()));
+    let block = pane(format!(" GitHub · {what}{count} "), true).title_bottom(Line::from(Span::styled(format!(" {last} "), DIM)));
+    let note = |msg: String, f: &mut Frame, block: Block<'static>| {
+        f.render_widget(Paragraph::new(msg).style(DIM.add_modifier(Modifier::ITALIC)).block(block), popup);
+    };
+    if let Some(e) = &v.error {
+        return note(format!("gh failed: {}", e.lines().next().unwrap_or("")), f, block);
+    }
+    let Some(items) = &v.items else { return note("Searching GitHub…".to_string(), f, block) };
+    if items.is_empty() {
+        return note("No repositories found.".to_string(), f, block);
+    }
+    let desc_w = (popup.width as usize).saturating_sub(4 + 38 + 7 + 11 + 5 + 8).max(8);
+    let rows: Vec<ListItem> = items
+        .iter()
+        .map(|i| {
+            let mut tags = String::new();
+            if i.private {
+                tags.push_str("private ");
+            }
+            if i.fork {
+                tags.push_str("fork ");
+            }
+            let have = cloned.contains(&i.slug.to_lowercase());
+            let stars = i.stars.map_or_else(String::new, |s| format!("★{s}"));
+            ListItem::new(Line::from(vec![
+                Span::styled(fit(&i.slug, 38), if have { hue(BOLD, GOOD) } else { BOLD }),
+                Span::styled(format!("{stars:>7} "), hue(DIM, WARN)),
+                Span::styled(fit(&i.language, 10), hue(PLAIN, ACCENT)),
+                Span::styled(format!("{:>4} ", i.age), DIM),
+                Span::styled(if have { "cloned " } else { "       " }, hue(PLAIN, GOOD)),
+                Span::styled(fit(&format!("{tags}{}", i.description), desc_w), DIM),
+            ]))
+        })
+        .collect();
+    f.render_stateful_widget(List::new(rows).block(block).highlight_style(INVERSE), popup, &mut v.list);
+}
+
 /// An issue or pull request as plain scrollable text.
 fn draw_text(f: &mut Frame, app: &mut App) {
     let [area, _] = Layout::vertical([Constraint::Min(0), Constraint::Length(footer_height(app))]).areas(f.area());
@@ -852,7 +911,7 @@ fn draw_help(f: &mut Frame) {
         ("m", "merge a branch (empty = upstream)"),
         ("z / Z", "stash all changes / pop the latest stash"),
         ("d v b I", "diff of the file / commit log / branches / git init in any folder"),
-        ("i y B", "GitHub: issues / pull requests / open the repository in the browser"),
+        ("i y B S", "GitHub: issues / pull requests / repo in browser / find & clone"),
         ("e / t / o", "yazi on the file or repository / shell / file manager"),
         ("* / x / H", "pin / ignore the repository / show ignored ones"),
         ("r / R", "reload selected repository / rescan all roots"),

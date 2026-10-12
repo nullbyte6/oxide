@@ -69,6 +69,8 @@ pub enum Op {
     DeleteBranch(String, bool),
     /// Check out the branch of a GitHub pull request (through `gh`).
     CheckoutPr(u64),
+    /// Clone a GitHub repository (`owner/repo`) into the operation's folder.
+    Clone(String),
 }
 
 impl Op {
@@ -90,6 +92,7 @@ impl Op {
             Op::NewBranch(_) => "new branch",
             Op::DeleteBranch(..) => "delete branch",
             Op::CheckoutPr(_) => "pr checkout",
+            Op::Clone(_) => "clone",
         }
     }
 }
@@ -393,6 +396,9 @@ pub fn perform(repo: &Path, op: &Op) -> Result<String, String> {
         Op::Switch(name, false) => run_all(repo, &["switch", name]),
         Op::NewBranch(name) => run_all(repo, &["switch", "-c", name]),
         Op::CheckoutPr(n) => crate::github::checkout(repo, *n),
+        Op::Clone(slug) if slug.starts_with('-') => Err(format!("invalid repository '{slug}'")),
+        Op::Clone(_) if repo.read_dir().is_ok_and(|mut d| d.next().is_some()) => Err(format!("{} already exists and is not empty", repo.display())),
+        Op::Clone(slug) => crate::github::clone(slug, repo),
         Op::DeleteBranch(name, force) => run_all(repo, &["branch", if *force { "-D" } else { "-d" }, "--", name]),
     }
 }

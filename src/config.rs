@@ -2,7 +2,7 @@
 //!
 //! The optional config file (`$XDG_CONFIG_HOME/oxide/config`, falling back to
 //! `~/.config/oxide/config`) is a list of `key = value` lines; `#` starts a comment.
-//! Supported keys: `root` (repeatable), `owner` (repeatable), `depth`, `color` and `hints` (`on` / `off`), and the repeatable `pin` and
+//! Supported keys: `root` (repeatable), `owner` (repeatable), `depth`, `color` and `hints` (`on` / `off`), `clone_dir`, and the repeatable `pin` and
 //! `ignore` (a repository directory name, or a path when the value contains `/` or starts with `~`).
 
 use std::{
@@ -26,6 +26,8 @@ pub struct Config {
     pub color: bool,
     /// Whether the key bar at the bottom starts visible (`hints = on|off`); `h` toggles it.
     pub hints: bool,
+    /// Folder that GitHub repositories are cloned into by default (`clone_dir`); the home directory otherwise.
+    pub clone_dir: PathBuf,
     /// Repositories always listed first (directory names or paths from `pin` entries).
     pub pins: Vec<String>,
     /// Repositories hidden from the list (directory names or paths from `ignore` entries).
@@ -118,6 +120,7 @@ impl Config {
         let mut depth = DEFAULT_DEPTH;
         let (mut pins, mut ignores) = (Vec::new(), Vec::new());
         let mut hints = true;
+        let mut clone_dir = home();
         let mut color = env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
 
         if let Ok(text) = fs::read_to_string(config_file()) {
@@ -139,6 +142,7 @@ impl Config {
                         "off" | "false" | "no" | "0" => hints = false,
                         _ => {}
                     },
+                    "clone_dir" => clone_dir = expand(val),
                     "pin" => pins.push(val.to_string()),
                     "ignore" => ignores.push(val.to_string()),
                     _ => {} // comments, blank lines and unknown keys
@@ -163,6 +167,6 @@ impl Config {
         owners.sort();
         owners.dedup();
 
-        Config { roots, owners, depth, color, hints, pins, ignores, cross_devices: explicit }
+        Config { roots, owners, depth, color, hints, clone_dir, pins, ignores, cross_devices: explicit }
     }
 }

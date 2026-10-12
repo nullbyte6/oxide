@@ -217,6 +217,57 @@ pub fn list(slug: &str, kind: Kind, state: State) -> Result<Vec<Item>, String> {
         .collect())
 }
 
+/// A repository in a GitHub search or in your own list.
+pub struct RepoItem {
+    /// `owner/repo`.
+    pub slug: String,
+    pub description: String,
+    /// Stars; None where the listing does not report them.
+    pub stars: Option<u64>,
+    pub language: String,
+    /// Time since the last push, e.g. `3d`.
+    pub age: String,
+    pub private: bool,
+    pub fork: bool,
+}
+
+/// Repositories matching `query` on GitHub, or your own repositories when the query is empty.
+pub fn find(query: &str) -> Result<Vec<RepoItem>, String> {
+    // Both listings are reduced to the same seven columns.
+    let out = if query.trim().is_empty() {
+        let jq = r#".[]|[.nameWithOwner,(.description//""),.stargazerCount,(.primaryLanguage.name//""),.pushedAt,.isPrivate,.isFork]|@tsv"#;
+        gh(None, &["repo", "list", "--limit", "100", "--json", "nameWithOwner,description,stargazerCount,primaryLanguage,pushedAt,isPrivate,isFork", "--jq", jq])?
+    } else {
+        let jq = r#".[]|[.fullName,(.description//""),.stargazersCount,(.language//""),.pushedAt,.isPrivate,.isFork]|@tsv"#;
+        let mut args = vec!["search", "repos", "--limit", "50", "--json", "fullName,description,stargazersCount,language,pushedAt,isPrivate,isFork", "--jq", jq, "--"];
+        args.extend(query.split_whitespace());
+        gh(None, &args)?
+    };
+    Ok(out
+        .lines()
+        .filter_map(|l| {
+            let f: Vec<String> = l.split('\t').map(untsv).collect();
+            let [slug, description, stars, language, pushed, private, fork] = &f[..] else { return None };
+            Some(RepoItem {
+                slug: slug.clone(),
+                description: description.clone(),
+                stars: stars.parse().ok(),
+                language: language.clone(),
+                age: ago(pushed),
+                private: private == "true",
+                fork: fork == "true",
+            })
+        })
+        .collect())
+}
+
+/// Clones `slug` into `dest` (using the protocol configured in `gh`); the parent folder is created if needed.
+pub fn clone(slug: &str, dest: &Path) -> Result<String, String> {
+    let parent = dest.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent).map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+    gh_all(Some(parent), &["repo", "clone", slug, &dest.display().to_string()])
+}
+
 /// Arguments for `gh` that open an item (or, with `number` None, the repository) in the web browser.
 pub fn browse_args(slug: &str, kind: Kind, number: Option<u64>) -> Vec<String> {
     match number {

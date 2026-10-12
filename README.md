@@ -25,7 +25,7 @@ screen, and lets you stage, commit, push, pull, fetch and merge without leaving 
 - **Diff viewer with syntax highlighting**: read the staged, unstaged or untracked diff of any changed file with line numbers and per-language colors, without leaving Oxide.
 - **Commit log and branches**: browse a repository's history and open any commit's diff; list, switch, create, merge and delete branches, with merged and stale ones flagged.
 - **`git init` anywhere**: initialise a repository in any folder, existing or new, and see it in the list right away.
-- **GitHub** (needs the [`gh`](https://cli.github.com) CLI, logged in): browse a repository's issues and pull requests, and open them or the repository in your browser.
+- **GitHub** (needs the [`gh`](https://cli.github.com) CLI, logged in): browse a repository's issues and pull requests, read them, diff and check out pull requests, find repositories (yours or anyone's) and clone them, and open things in your browser.
 - **Jump out**: open the selected file or repository in yazi, a shell or the file manager.
 - **Non-blocking**: scans and git commands run on background threads; the UI never freezes.
 - **Search**: filter the list live by name, branch or path.
@@ -93,6 +93,7 @@ oxide [OPTIONS] [PATH...]
 | `I` | `git init` in a folder: the prompt starts with the current directory, append a name for a new folder |
 | `i` / `y` | GitHub issues / pull requests of the selected repository (see below) |
 | `B` | Open the selected repository's GitHub page in the browser |
+| `S` | Find GitHub repositories and clone them (see below) |
 | `e` | Open [yazi](https://yazi-rs.github.io) in the repository, with the highlighted file revealed when the changes list is focused. Open files from yazi with your usual opener (e.g. nvim). Without yazi installed it falls back to `$VISUAL` / `$EDITOR` |
 | `t` | Open `$SHELL` in the repository; exit it to return |
 | `o` | Open the repository folder in the file manager (`xdg-open`) |
@@ -125,6 +126,24 @@ the source branch instead of labels and mark drafts `◌`, approved `✓` and ch
 | `B` | Open the repository in the browser |
 | `r` | Reload |
 | `Esc`, `q` | Close |
+
+#### Finding and cloning repositories
+
+`S` asks for search terms (the same syntax as GitHub's search, e.g. `tui language:rust`); an empty search
+lists your own repositories, private ones included. Results show the stars, language, age of the last
+push, `private` / `fork` tags and the description, and repositories you already have locally are marked
+`cloned`.
+
+| Key | Action |
+| --- | --- |
+| `Enter` | Clone the repository: the prompt starts with `clone_dir/<name>`, edit it freely (relative paths start from `clone_dir`). The new repository is added to the list and selected. On one you already have, Enter jumps to the local copy instead |
+| `/` or `S` | New search |
+| `o` | Open the highlighted repository in the browser |
+| `r` | Reload |
+| `Esc`, `q` | Close |
+
+The clone uses the protocol configured in `gh` (ssh or https). Like `git init`, a clone outside the scan
+roots disappears on the next full rescan (`R`); `clone_dir` is the best place to also list as a `root`.
 
 ### Commit log
 
@@ -231,6 +250,9 @@ color = on
 
 # start with the key bar at the bottom visible (on) or hidden (off); the h key toggles it
 hints = on
+
+# folder that GitHub repositories are cloned into by default (home directory when unset)
+clone_dir = ~/dev
 
 # repositories listed first / hidden: a directory name, or a path (a value with a "/" or a leading "~"
 # also covers every repository below it)

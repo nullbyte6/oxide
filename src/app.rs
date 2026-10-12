@@ -18,7 +18,7 @@ use crate::{
     config::{self, Config},
     diff::{self, Diff},
     git::{Branch, Commit, DiffKind, Op},
-    github::{self, Item, Kind, State},
+    github::{self, Item, Kind, RepoItem, State},
     logger::{self, Level, Logger},
     marks::{Mark, Marks},
     palette,
@@ -211,6 +211,23 @@ pub struct GhView {
     id: u64,
 }
 
+/// GitHub repositories found by a search, or your own, to clone.
+pub struct FinderView {
+    /// The search terms; empty for your own repositories.
+    pub query: String,
+    /// None while loading.
+    pub items: Option<Vec<RepoItem>>,
+    pub error: Option<String>,
+    pub list: ListState,
+    id: u64,
+}
+
+impl FinderView {
+    fn selected(&self) -> Option<&RepoItem> {
+        self.items.as_ref()?.get(self.list.selected()?)
+    }
+}
+
 /// An issue or pull request as scrollable text, opened from the GitHub list.
 pub struct TextView {
     pub title: String,
@@ -256,6 +273,10 @@ pub enum InputKind {
     Branch,
     /// Folder to run `git init` in.
     Init,
+    /// Search terms for GitHub repositories (empty lists your own).
+    GhSearch,
+    /// Folder to clone the chosen GitHub repository into.
+    CloneTo,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -276,6 +297,8 @@ pub enum Mode {
     GitHub,
     /// An issue or pull request opened as text (`App::text`).
     Text,
+    /// GitHub repository search results (`App::finder`).
+    Finder,
     Help,
 }
 
@@ -321,6 +344,9 @@ pub struct App {
     pub branches: Option<BranchView>,
     pub gh: Option<GhView>,
     pub text: Option<TextView>,
+    pub finder: Option<FinderView>,
+    /// The repository chosen in the finder, waiting for a clone destination.
+    clone_slug: Option<String>,
     /// Mode to return to when the input line closes (the dashboard, or the branch list).
     input_back: Mode,
     /// A repository just created with `git init`, selected as soon as it is loaded.
@@ -376,6 +402,8 @@ impl App {
             branches: None,
             gh: None,
             text: None,
+            finder: None,
+            clone_slug: None,
             input_back: Mode::Normal,
             pending_select: None,
             diff_id: 0,
@@ -501,6 +529,17 @@ impl App {
                         }
                     }
                 }
+                Msg::Repos { id, result } => {
+                    if let Some(v) = self.finder.as_mut().filter(|v| v.id == id) {
+                        match result {
+                            Ok(items) => {
+                                v.list.select(if items.is_empty() { None } else { Some(0) });
+                                v.items = Some(items);
+                            }
+                            Err(e) => v.error = Some(e),
+                        }
+                    }
+                }
                 Msg::Text { id, result } => {
                     if let Some(v) = self.text.as_mut().filter(|v| v.id == id) {
                         match result {
@@ -616,6 +655,7 @@ impl App {
             Mode::Branches => self.on_branch_key(key),
             Mode::GitHub => self.on_gh_key(key),
             Mode::Text => self.on_text_key(key),
+            Mode::Finder => self.on_finder_key(key),
             Mode::Normal => self.on_normal_key(key),
         }
     }
@@ -656,6 +696,7 @@ impl App {
             KeyCode::Char('i') => self.open_gh(Kind::Issues),
             KeyCode::Char('y') => self.open_gh(Kind::Pulls),
             KeyCode::Char('B') => self.browse_repo(),
+            KeyCode::Char('S') => self.open_input(InputKind::GhSearch),
             KeyCode::Char('s') => self.cycle_sort(),
             KeyCode::Char('C') => {
                 self.color = !self.color;
@@ -999,6 +1040,88 @@ impl App {
         }
     }
 
+    // ---- finding and cloning repositories ----
+
+    fn load_finder(&mut self) {
+        self.diff_id += 1;
+        let Some(v) = self.finder.as_mut() else { return };
+        v.id = self.diff_id;
+        v.items = None;
+        v.error = None;
+        let (id, query) = (v.id, v.query.clone());
+        worker::spawn_msg(self.tx.clone(), move || Msg::Repos { id, result: github::find(&query) });
+    }
+
+    fn on_finder_key(&mut self, key: KeyEvent) {
+        let Some(v) = self.finder.as_mut() else {
+            self.mode = Mode::Normal;
+            return;
+        };
+        let len = v.items.as_ref().map_or(0, Vec::len);
+        let delta = match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.finder = None;
+                self.mode = Mode::Normal;
+                return;
+            }
+            KeyCode::Char('/' | 'S') => {
+                let query = v.query.clone();
+                self.open_input(InputKind::GhSearch);
+                self.input = query;
+                return;
+            }
+            KeyCode::Char('r') => {
+                self.load_finder();
+                return;
+            }
+            KeyCode::Char('o') => {
+                let args = v.selected().map(|i| vec!["browse".to_string(), "-R".into(), i.slug.clone()]);
+                if let Some(args) = args {
+                    self.spawn_detached("gh", &args, "opened in the browser");
+                }
+                return;
+            }
+            KeyCode::Enter => {
+                if let Some(slug) = v.selected().map(|i| i.slug.clone()) {
+                    self.choose_repo(slug);
+                }
+                return;
+            }
+            KeyCode::Down | KeyCode::Char('j') => 1,
+            KeyCode::Up | KeyCode::Char('k') => -1,
+            KeyCode::PageDown | KeyCode::Char(' ') => 15,
+            KeyCode::PageUp | KeyCode::Char('b') => -15,
+            KeyCode::Home | KeyCode::Char('g') => -(1 << 30),
+            KeyCode::End | KeyCode::Char('G') => 1 << 30,
+            _ => return,
+        };
+        v.list.select(step(v.list.selected(), len, delta));
+    }
+
+    /// Enter on a found repository: jump to it if it is already cloned, else ask where to clone it.
+    fn choose_repo(&mut self, slug: String) {
+        let local = self.repos.iter().find(|r| r.slug.as_deref().is_some_and(|s| s.eq_ignore_ascii_case(&slug))).map(|r| r.path.clone());
+        if let Some(path) = local {
+            self.log(Level::Info, format!("{slug} is already cloned at {}", path.display()));
+            self.finder = None;
+            self.mode = Mode::Normal;
+            self.filter = Filter::All;
+            self.search.clear();
+            self.show_hidden = true;
+            self.rebuild();
+            if let Some(i) = self.visible.iter().position(|&r| self.repos[r].path == path) {
+                self.repo_state.select(Some(i));
+                self.file_state.select(None);
+                self.clamp_files();
+            }
+            return;
+        }
+        let name = slug.rsplit('/').next().unwrap_or(&slug).to_string();
+        self.clone_slug = Some(slug);
+        self.open_input(InputKind::CloneTo);
+        self.input = self.cfg.clone_dir.join(name).display().to_string();
+    }
+
     /// Opens the selected repository's GitHub page in the browser.
     fn browse_repo(&mut self) {
         let Some((_, _, slug)) = self.github_target() else { return };
@@ -1027,6 +1150,22 @@ impl App {
         if let Ok(dir) = std::env::current_dir() {
             self.input = format!("{}/", dir.display());
         }
+    }
+
+    /// Clones the repository chosen in the finder into `text` (relative paths start from `clone_dir`).
+    fn clone_repo(&mut self, text: &str) {
+        let Some(slug) = self.clone_slug.take() else { return };
+        if text.is_empty() {
+            self.log(Level::Warn, "no folder given, clone cancelled");
+            return;
+        }
+        let mut path = config::expand(text);
+        if path.is_relative() {
+            path = self.cfg.clone_dir.join(path);
+        }
+        self.log(Level::Info, format!("cloning {slug} into {}", path.display()));
+        self.pending_select = Some(path.clone());
+        self.run_ops(vec![(path, Op::Clone(slug))]);
     }
 
     fn init_repo(&mut self, text: &str) {
@@ -1195,7 +1334,7 @@ impl App {
 
     fn open_input(&mut self, kind: InputKind) {
         self.input = if kind == InputKind::Search { self.search.clone() } else { String::new() };
-        self.input_back = if self.mode == Mode::Branches { Mode::Branches } else { Mode::Normal };
+        self.input_back = if matches!(self.mode, Mode::Branches | Mode::Finder) { self.mode } else { Mode::Normal };
         self.mode = Mode::Input(kind);
     }
 
@@ -1212,6 +1351,12 @@ impl App {
         let text = std::mem::take(&mut self.input).trim().to_string();
         match kind {
             InputKind::Init => self.init_repo(&text),
+            InputKind::GhSearch => {
+                self.finder = Some(FinderView { query: text, items: None, error: None, list: ListState::default(), id: 0 });
+                self.mode = Mode::Finder;
+                self.load_finder();
+            }
+            InputKind::CloneTo => self.clone_repo(&text),
             InputKind::Branch if text.is_empty() => self.log(Level::Warn, "empty branch name, nothing created"),
             InputKind::Branch => {
                 if let Some(repo) = self.branches.as_ref().map(|v| v.repo.clone()) {

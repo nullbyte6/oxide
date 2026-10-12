@@ -32,6 +32,8 @@ pub enum Msg {
     History { id: u64, result: Result<Vec<git::Commit>, String> },
     /// The branch list (or error) requested with the given id.
     Branches { id: u64, result: Result<Vec<git::Branch>, String> },
+    /// Repositories found on GitHub (or the error) requested with the given id.
+    Repos { id: u64, result: Result<Vec<github::RepoItem>, String> },
     /// Issues or pull requests (or the error) requested with the given id.
     GitHub { id: u64, result: Result<Vec<github::Item>, String> },
     /// The text of an issue or pull request (or the error) requested with the given id.
@@ -76,9 +78,9 @@ pub fn spawn_ops(jobs: Vec<(PathBuf, Op)>, cfg: Arc<Config>, tx: Sender<Msg>) {
     thread::spawn(move || {
         pool(jobs, |(path, op)| {
             let result = git::perform(&path, &op);
-            let failed_init = matches!(op, Op::Init) && result.is_err();
+            let failed_init = matches!(op, Op::Init | Op::Clone(_)) && result.is_err();
             let _ = tx.send(Msg::Op { path: path.clone(), label: op.label(), result });
-            // A failed init leaves no repository, so there is nothing to load (it would show as a broken one).
+            // A failed init or clone leaves no repository, so there is nothing to load (it would show as a broken one).
             if !failed_init {
                 let _ = tx.send(Msg::Repo(repo::load(&path, &cfg)));
             }
