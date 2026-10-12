@@ -89,8 +89,9 @@ impl Sort {
 
 /// An external program that needs the terminal; the event loop suspends the dashboard to run it.
 pub enum Launch {
-    /// `$VISUAL` / `$EDITOR` on `target`, started inside `repo`.
-    Editor { repo: PathBuf, target: PathBuf },
+    /// The yazi file manager inside `repo`, with `target` revealed. Files are then opened from yazi,
+    /// with whatever program its rules choose (e.g. nvim). Without yazi, `$VISUAL` / `$EDITOR` opens `target`.
+    Browse { repo: PathBuf, target: PathBuf },
     /// `$SHELL` inside `repo`.
     Shell { repo: PathBuf },
 }
@@ -98,21 +99,21 @@ pub enum Launch {
 impl Launch {
     pub fn repo(&self) -> &Path {
         match self {
-            Launch::Editor { repo, .. } | Launch::Shell { repo } => repo,
+            Launch::Browse { repo, .. } | Launch::Shell { repo } => repo,
         }
     }
 
     /// Runs the program in the foreground and waits for it.
     pub fn run(&self) -> Result<(), String> {
         let (mut cmd, name) = match self {
-            Launch::Editor { target, .. } => {
-                let line = ["VISUAL", "EDITOR"].iter().find_map(|v| std::env::var(v).ok().filter(|s| !s.trim().is_empty()));
-                let line = line.unwrap_or_else(|| "vi".to_string());
-                let mut parts = line.split_whitespace().map(str::to_string);
-                let program = parts.next().unwrap_or_else(|| "vi".to_string());
-                let mut cmd = Command::new(&program);
-                cmd.args(parts).arg(target);
-                (cmd, program)
+            Launch::Browse { repo, target } => {
+                return match Command::new("yazi").arg(target).current_dir(repo).status() {
+                    Ok(_) => Ok(()),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        run_editor(repo, target).map_err(|e| format!("yazi is not installed, and the editor failed: {e}"))
+                    }
+                    Err(e) => Err(format!("cannot run yazi: {e}")),
+                };
             }
             Launch::Shell { .. } => {
                 let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/sh".to_string());
@@ -122,6 +123,21 @@ impl Launch {
         };
         cmd.current_dir(self.repo()).status().map(|_| ()).map_err(|e| format!("cannot run {name}: {e}"))
     }
+}
+
+/// Fallback when yazi is missing: `$VISUAL` / `$EDITOR` (default `vi`) on `target`.
+fn run_editor(repo: &Path, target: &Path) -> Result<(), String> {
+    let line = ["VISUAL", "EDITOR"].iter().find_map(|v| std::env::var(v).ok().filter(|s| !s.trim().is_empty()));
+    let line = line.unwrap_or_else(|| "vi".to_string());
+    let mut parts = line.split_whitespace().map(str::to_string);
+    let program = parts.next().unwrap_or_else(|| "vi".to_string());
+    Command::new(&program)
+        .args(parts)
+        .arg(target)
+        .current_dir(repo)
+        .status()
+        .map(|_| ())
+        .map_err(|e| format!("cannot run {program}: {e}"))
 }
 
 /// The diff viewer: one file of one repository.
@@ -471,7 +487,7 @@ impl App {
             KeyCode::Char('Z') => self.op_selected(Op::StashPop),
             KeyCode::Char('L') => self.pull_visible(),
             KeyCode::Char('U') => self.push_visible(),
-            KeyCode::Char('e') => self.open_editor(),
+            KeyCode::Char('e') => self.open_browser(),
             KeyCode::Char('t') => self.open_shell(),
             KeyCode::Char('o') => self.open_files(),
             KeyCode::Char('/') => self.open_input(InputKind::Search),
@@ -746,12 +762,13 @@ impl App {
         }
     }
 
-    /// Opens the highlighted file (or the repository when no file pane is focused) in the editor.
-    fn open_editor(&mut self) {
+    /// Opens yazi in the repository, revealing the highlighted file when the changes pane has focus.
+    fn open_browser(&mut self) {
         let Some(r) = self.selected() else { return };
         let file = if self.focus == Focus::Files { self.file_state.selected().and_then(|i| r.files.get(i)) } else { None };
-        let target = file.map_or_else(|| r.path.clone(), |f| r.path.join(&f.path));
-        self.launch = Some(Launch::Editor { repo: r.path.clone(), target });
+        // A deleted file no longer exists to reveal; fall back to the repository folder.
+        let target = file.map(|f| r.path.join(&f.path)).filter(|p| p.exists()).unwrap_or_else(|| r.path.clone());
+        self.launch = Some(Launch::Browse { repo: r.path.clone(), target });
     }
 
     fn open_shell(&mut self) {
