@@ -12,7 +12,8 @@ All notable changes to Oxide are recorded here, newest version first.
 - Add live search, fetch-all and `--list` plain-text output.
 - Add config file (`root`, `owner`, `depth`) and persistent log file with rotation.
 - Add LICENSE (MIT) and README with usage, keys and configuration.
-- Add ASCII banner on top of the dashboard, loaded from `src/banner.txt`.
+- Add ASCII banner on top of the dashboard, loaded from `src/banner.sh`.
+- Add banner renderer that converts the script's ANSI colors to Ratatui styles and hides the banner on small terminals.
 
 ### Changed
 - Update panels with one column of inner side padding so all four sides look equally thick.

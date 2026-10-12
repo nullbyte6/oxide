@@ -1,6 +1,7 @@
 //! Oxide: a terminal dashboard for every git repository on your machine.
 
 mod app;
+mod banner;
 mod config;
 mod git;
 mod logger;

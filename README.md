@@ -124,9 +124,16 @@ subdirectories are not searched for nested repositories.
 
 ## Banner
 
-The ASCII art above the dashboard is the plain text file [`src/banner.txt`](src/banner.txt).
-Paste your own art there and rebuild; no Rust escaping is needed. An empty file removes
-the banner. Each line of art costs one terminal row.
+The art above the dashboard comes from [`src/banner.sh`](src/banner.sh). Oxide embeds the
+file when it is built and converts its colors itself; the script is never run. Preview
+it in any terminal with `bash src/banner.sh`.
+
+- Every art line must be `echo -e "..."`; other lines in the file are ignored.
+- Supported color codes: reset, bold, and the 16 standard foreground/background colors
+  (`\033[0;97m`, `\033[0;90;47m`, ...). They follow your terminal theme.
+- Edit the script and rebuild to change the banner.
+- The banner is hidden when the terminal is narrower than the art or has fewer than
+  24 rows to spare, so the dashboard always keeps its space.
 
 ## Logs
 
@@ -152,7 +159,8 @@ run in batch mode unless you set `core.sshCommand`, `GIT_SSH_COMMAND` or `GIT_SS
 | `src/worker.rs` | Background scan and operation threads |
 | `src/config.rs` | Config file, roots and owner names |
 | `src/logger.rs` | Persistent log file |
-| `src/banner.txt` | ASCII banner shown on top of the dashboard |
+| `src/banner.rs` | Turns `src/banner.sh` colored art into Ratatui lines |
+| `src/banner.sh` | The ASCII banner art shown on top of the dashboard |
 
 ## Versioning
 

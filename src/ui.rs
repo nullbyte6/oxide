@@ -10,6 +10,7 @@ use ratatui::{
 
 use crate::{
     app::{App, Filter, Focus, InputKind, Mode},
+    banner,
     git::FileEntry,
     logger::Level,
     repo::{Health, Owner, Repo},
@@ -18,26 +19,29 @@ use crate::{
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const ACCENT: Color = Color::Cyan;
 
-/// Banner art shown above the dashboard; edit `src/banner.txt` to change it (empty file = no banner).
-const BANNER: &str = include_str!("banner.txt");
+/// Rows the dashboard needs below the banner; on shorter terminals the banner is hidden.
+const MIN_DASHBOARD_ROWS: u16 = 24;
 
 /// Inner side padding of every panel. A terminal cell is about twice as tall as it is wide,
 /// so one column of padding makes the sides look as thick as the one-row top and bottom borders.
 const SIDE_PAD: u16 = 1;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
-    let banner = BANNER.trim_matches('\n');
-    let banner_h = banner.lines().count() as u16;
+    let banner = banner::get();
+    let banner_h = banner.lines.len() as u16;
+    let show_banner = banner_h > 0 && f.area().height >= banner_h + MIN_DASHBOARD_ROWS && f.area().width >= banner.width;
     let [banner_area, header, body, log, footer] = Layout::vertical([
-        Constraint::Length(banner_h),
+        Constraint::Length(if show_banner { banner_h } else { 0 }),
         Constraint::Length(3),
         Constraint::Min(8),
         Constraint::Length(8),
         Constraint::Length(1),
     ])
     .areas(f.area());
-    if banner_h > 0 {
-        f.render_widget(Paragraph::new(banner).style(Style::new().fg(ACCENT).bold()).centered(), banner_area);
+    if show_banner {
+        // Center the art as one block so its lines stay aligned with each other.
+        let [_, art, _] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(banner.width), Constraint::Fill(1)]).areas(banner_area);
+        f.render_widget(Paragraph::new(banner.lines.clone()), art);
     }
     let [left, right] = Layout::horizontal([Constraint::Percentage(54), Constraint::Percentage(46)]).areas(body);
 
