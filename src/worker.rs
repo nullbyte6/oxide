@@ -34,6 +34,8 @@ pub enum Msg {
     Diff { id: u64, result: Result<String, String> },
     /// The commit log (or error) requested with the given id.
     History { id: u64, result: Result<Vec<git::Commit>, String> },
+    /// The reflog (or error) requested with the given id.
+    Reflog { id: u64, result: Result<Vec<git::ReflogEntry>, String> },
     /// The branch list (or error) requested with the given id.
     Branches { id: u64, result: Result<Vec<git::Branch>, String> },
     /// The repository's folder was deleted from disk; drop it from the list.
@@ -146,6 +148,13 @@ pub fn spawn_diff(repo: PathBuf, file: String, kind: DiffKind, id: u64, tx: Send
 pub fn spawn_history(repo: PathBuf, id: u64, tx: Sender<Msg>) {
     thread::spawn(move || {
         let _ = tx.send(Msg::History { id, result: git::log(&repo, 500) });
+    });
+}
+
+/// Loads the reflog in the background.
+pub fn spawn_reflog(repo: PathBuf, id: u64, tx: Sender<Msg>) {
+    thread::spawn(move || {
+        let _ = tx.send(Msg::Reflog { id, result: git::reflog(&repo, 300) });
     });
 }
 

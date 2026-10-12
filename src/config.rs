@@ -2,7 +2,7 @@
 //!
 //! The optional config file (`$XDG_CONFIG_HOME/oxide/config`, falling back to
 //! `~/.config/oxide/config`) is a list of `key = value` lines; `#` starts a comment.
-//! Supported keys: `root` (repeatable), `owner` (repeatable), `depth`, `color`, `hints`, `logs` and `ci` (`on` / `off`), `autofetch` (`off`, or an
+//! Supported keys: `root` (repeatable), `owner` (repeatable), `depth`, `color`, `hints`, `logs` and `ci` (`on` / `off`), `email` (repeatable), `autofetch` (`off`, or an
 //! interval such as `10m`), `clone_dir`, and the repeatable `pin` and
 //! `ignore` (a repository directory name, or a path when the value contains `/` or starts with `~`).
 
@@ -29,6 +29,8 @@ pub struct Config {
     pub hints: bool,
     /// Whether the log panel starts visible (`logs = on|off`); `l` toggles it.
     pub logs: bool,
+    /// Lowercase e-mail addresses commits are expected to be made with (`email`); the global `user.email` when empty.
+    pub emails: Vec<String>,
     /// Seconds between automatic fetches of every repository (`autofetch = 10m`); 0 turns it off.
     pub autofetch: u64,
     /// Whether the CI status of GitHub repositories is loaded in the background (`ci = on|off`); `w` always refreshes it.
@@ -145,6 +147,7 @@ impl Config {
         let mut hints = true;
         let mut logs = true;
         let mut clone_dir = home();
+        let mut emails = Vec::new();
         let mut autofetch = 0;
         let mut ci = true;
         let mut color = env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
@@ -169,6 +172,7 @@ impl Config {
                         _ => {}
                     },
                     "clone_dir" => clone_dir = expand(val),
+                    "email" => emails.push(val.to_lowercase()),
                     "autofetch" => autofetch = parse_interval(val).unwrap_or(autofetch),
                     "ci" => match val.to_lowercase().as_str() {
                         "on" | "true" | "yes" | "1" => ci = true,
@@ -204,6 +208,6 @@ impl Config {
         owners.sort();
         owners.dedup();
 
-        Config { roots, owners, depth, color, hints, logs, autofetch, ci, clone_dir, pins, ignores, cross_devices: explicit }
+        Config { roots, owners, depth, color, hints, logs, emails, autofetch, ci, clone_dir, pins, ignores, cross_devices: explicit }
     }
 }

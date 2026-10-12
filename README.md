@@ -83,7 +83,9 @@ oxide [OPTIONS] [PATH...]
 | `Space` / `Enter` | Stage or unstage the highlighted file |
 | `d` | Open the diff viewer on the highlighted file (see below) |
 | `a` / `u` | Stage all / unstage all |
-| `c` | Commit staged changes (prompts for a message) |
+| `c` | Commit staged changes (prompts for a message; see *Commit helpers* below) |
+| `E` | Amend the last commit with the staged changes (empty message keeps the old one) |
+| `O` | Reflog of the selected repository: see where HEAD has been and undo (see below) |
 | `p` | Pull (fast-forward only) |
 | `P` | Push (a branch without upstream is published with `-u`) |
 | `F` | Fetch the selected repository (`--all --prune`) |
@@ -149,6 +151,36 @@ push, `private` / `fork` tags and the description, and repositories you already 
 
 The clone uses the protocol configured in `gh` (ssh or https). Like `git init`, a clone outside the scan
 roots disappears on the next full rescan (`R`); `clone_dir` is the best place to also list as a `root`.
+
+### Commit helpers
+
+In the commit (`c`) and amend (`E`) prompts:
+
+- `Tab` / `Shift+Tab` put the next / previous conventional-commit type in front of the message (`feat`, `fix`, `docs`,
+  `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`), replacing the one already there and keeping a
+  `(scope)` or `!`.
+- If the repository has a `commit.template`, its first line that is not empty or a `#` comment starts the prompt.
+- Pre-commit and commit-msg hook output is shown in the log (up to 12 lines). When a hook rejects the commit, the
+  message you typed is restored in the next commit prompt instead of being lost.
+- A warning appears next to the prompt when the repository would commit with an e-mail other than the expected one:
+  the `email` entries of the config file, or your global `user.email` without any. It also warns when no `user.email` is set.
+
+Amending a commit that is already pushed logs a reminder that publishing it needs a force push.
+
+### Reflog and undo
+
+`O` lists where HEAD has been (`git reflog`), newest first, with what moved it: commits, checkouts, merges,
+pulls, resets, rebases. Every action asks `y` first.
+
+| Key | Action |
+| --- | --- |
+| `u` | Undo the highlighted entry: a checkout goes back to the branch it came from, anything else moves the branch back to where it was before (`git reset --keep`, so uncommitted changes survive and git refuses if they would be lost) |
+| `Enter` | Move the current branch to the highlighted entry's commit (`git reset --keep`) |
+| `d` | Show the commit in the diff viewer |
+| `↑` `↓` / `j` `k`, `g` / `G`, `Space` / `b` | Move |
+| `Esc`, `q`, `O` | Close |
+
+With the first entry highlighted, `u` is a one-key undo of the last thing that happened.
 
 ### Live updates and CI
 
@@ -292,6 +324,10 @@ hints = on
 
 # start with the log panel visible (on) or hidden (off); the l key toggles it
 logs = on
+
+# e-mail addresses commits should be made with (repeatable); a warning shows in the commit prompt for any other.
+# Without entries the global user.email is the expected one.
+email = me@example.com
 
 # fetch every repository on this interval (30s, 10m, 1h; a bare number is minutes; off by default)
 autofetch = 10m

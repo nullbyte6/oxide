@@ -114,6 +114,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Diff => draw_diff(f, app),
         Mode::History => draw_history(f, app),
         Mode::Branches => draw_branches(f, app),
+        Mode::Reflog => draw_reflog(f, app),
         Mode::GitHub => draw_github(f, app),
         Mode::Text => draw_text(f, app),
         Mode::Finder => draw_finder(f, app),
@@ -475,7 +476,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
 
     if let Mode::Input(kind) = app.mode {
         let prompt = match kind {
-            InputKind::Commit => format!("commit message → {}", app.selected().map_or("", |r| r.name.as_str())),
+            InputKind::Commit => format!("commit message → {} (Tab: type)", app.selected().map_or("", |r| r.name.as_str())),
+            InputKind::Amend => format!("amend last commit of {} (empty = keep message, Tab: type)", app.selected().map_or("", |r| r.name.as_str())),
             InputKind::Merge => format!("merge into {} (empty = upstream)", app.selected().map_or("", |r| r.branch.as_str())),
             InputKind::Search => "search".to_string(),
             InputKind::Branch => format!("new branch from {}", app.selected().map_or("", |r| r.branch.as_str())),
@@ -489,12 +491,13 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                 format!("DELETE {path} from disk ({}). Type \"{}\"", r.risk_summary(), r.name)
             }),
         };
-        let line = Line::from(vec![
-            Span::styled(format!(" {prompt} ▸ "), hue(BOLD, ACCENT)),
-            Span::styled(app.input.clone(), PLAIN),
-            Span::styled("█", PLAIN),
-        ]);
-        f.render_widget(Paragraph::new(line), area);
+        let mut spans = vec![Span::styled(format!(" {prompt} "), hue(BOLD, ACCENT))];
+        // The identity warning sits right next to the prompt so it is seen before the message is sent.
+        if let (InputKind::Commit | InputKind::Amend, Some(warn)) = (kind, &app.commit_warn) {
+            spans.push(Span::styled(format!("⚠ {warn} "), hue(BOLD, WARN)));
+        }
+        spans.extend([Span::styled("▸ ", hue(BOLD, ACCENT)), Span::styled(app.input.clone(), PLAIN), Span::styled("█", PLAIN)]);
+        f.render_widget(Paragraph::new(Line::from(spans)), area);
         return;
     }
 
@@ -519,6 +522,11 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
 
     if app.mode == Mode::History {
         let hints = [("↑↓", "move"), ("Enter", "show the commit"), ("g G", "newest/oldest"), ("Esc", "close")];
+        f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
+        return;
+    }
+    if app.mode == Mode::Reflog {
+        let hints = [("↑↓", "move"), ("u", "undo this entry"), ("Enter", "move branch here"), ("d", "show the commit"), ("Esc", "close")];
         f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
         return;
     }
@@ -738,6 +746,39 @@ fn draw_history(f: &mut Frame, app: &mut App) {
             }
             spans.push(Span::styled(c.subject.clone(), PLAIN));
             ListItem::new(Line::from(spans))
+        })
+        .collect();
+    f.render_stateful_widget(List::new(items).block(block).highlight_style(INVERSE), area, &mut v.state);
+}
+
+/// The reflog: a full-screen list of where HEAD has been, newest first.
+fn draw_reflog(f: &mut Frame, app: &mut App) {
+    let [area, _] = Layout::vertical([Constraint::Min(0), Constraint::Length(footer_height(app))]).areas(f.area());
+    let Some(v) = app.reflog.as_mut() else { return };
+    f.render_widget(Clear, area);
+    let count = v.entries.as_ref().map_or(String::new(), |e| format!(" ({})", e.len()));
+    let block = pane(format!(" Reflog · {}{count} ", v.name), true);
+    let note = |msg: String, f: &mut Frame, block: Block<'static>| {
+        f.render_widget(Paragraph::new(msg).style(DIM.add_modifier(Modifier::ITALIC)).block(block), area);
+    };
+    if let Some(e) = &v.error {
+        return note(format!("git reflog failed: {}", e.lines().next().unwrap_or("")), f, block);
+    }
+    let Some(entries) = &v.entries else { return note("Loading the reflog…".to_string(), f, block) };
+    if entries.is_empty() {
+        return note("The reflog is empty.".to_string(), f, block);
+    }
+    let items: Vec<ListItem> = entries
+        .iter()
+        .map(|e| {
+            // `commit: msg` -> the kind in color, the rest plain.
+            let (kind, rest) = e.subject.split_once(": ").unwrap_or((e.subject.as_str(), ""));
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{:<8}", e.short), hue(DIM, WARN)),
+                Span::styled(fit(&e.date, 15), DIM),
+                Span::styled(kind.to_string(), hue(BOLD, ACCENT)),
+                Span::styled(if rest.is_empty() { String::new() } else { format!(": {rest}") }, PLAIN),
+            ]))
         })
         .collect();
     f.render_stateful_widget(List::new(items).block(block).highlight_style(INVERSE), area, &mut v.state);
@@ -975,12 +1016,13 @@ fn draw_help(f: &mut Frame) {
         ("s", "sort: name / recent / changes / behind"),
         ("/", "search by name, branch or path (Esc clears)"),
         ("Space, a, u", "stage / unstage the file, stage all, unstage all"),
-        ("c", "commit staged changes"),
+        ("c / E", "commit staged changes (Tab picks feat/fix/…) / amend the last commit"),
         ("p / P", "pull (fast-forward only) / push (new branches with -u)"),
         ("F / A", "fetch selected repository / every one in view"),
         ("L / U", "pull every behind / push every ahead repository in view"),
         ("m z Z", "merge a branch (empty = upstream) / stash all changes / pop the stash"),
         ("d v b I", "diff of the file / commit log / branches / git init in any folder"),
+        ("O", "reflog: where HEAD has been; u undoes an entry, Enter moves the branch there"),
         ("D", "DELETE the repository from disk (asks you to type its name)"),
         ("i y B S", "GitHub: issues / pull requests / repo in browser / find & clone"),
         ("e / t / o", "yazi on the file or repository / shell / file manager"),

@@ -37,6 +37,9 @@ All notable changes to Oxide are recorded here, newest version first.
 - Add file watching through inotify (`src/watch.rs`, no new dependency): every repository's `.git` and the selected repository's working tree are watched, and a repository reloads shortly after the last change made outside Oxide. Status is read with `--no-optional-locks` so reloading never triggers the watcher itself.
 - Add `autofetch` config option (`30s`, `10m`, `1h`; off by default) that fetches every repository on a timer, logging only the first failure of a round, with `⟳` and the interval in the header.
 - Add CI status on repository rows (`✓` passing, `✗` failing, spinner running, `○` inconclusive) and in the details pane, loaded through `gh run list` after the scan, after auto-fetch and on `w`; `ci = off` turns the automatic refresh off.
+- Add `E` to amend the last commit (staged changes are folded in, an empty message keeps the old one) and a reminder when the commit is already pushed.
+- Add a reflog view (`O`) with one-key undo (`u`: checkouts go back to the previous branch, other entries move the branch back with `git reset --keep`), `Enter` to move the branch to an entry and `d` to show its commit; every action asks for confirmation.
+- Add commit helpers: `Tab` cycles conventional-commit types in the commit and amend prompts, the first line of `commit.template` prefills the prompt, up to 12 lines of hook output are logged, a rejected commit's message is restored on the next try, and an `email` config option (else the global `user.email`) drives an identity warning next to the prompt.
 
 ### Fixed
 - Fix the key bar losing its last keys on narrow terminals: hints are now dropped from the middle by importance, always keeping `h`, `?` and `q`.

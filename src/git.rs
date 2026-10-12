@@ -73,6 +73,12 @@ pub enum Op {
     Clone(String),
     /// Delete the repository's folder from disk.
     Delete,
+    /// Amend the last commit with the staged changes; an empty message keeps the old one.
+    Amend(String),
+    /// `git reset --keep` to a commit: moves the branch, keeps uncommitted changes (refuses when they would be lost).
+    Reset(String),
+    /// Check out a branch or commit by name.
+    Checkout(String),
     /// Apply one hunk of a diff to the index: stage it, or with `reverse` unstage it.
     Hunk { patch: String, reverse: bool },
 }
@@ -98,6 +104,9 @@ impl Op {
             Op::CheckoutPr(_) => "pr checkout",
             Op::Clone(_) => "clone",
             Op::Delete => "delete",
+            Op::Amend(_) => "amend",
+            Op::Reset(_) => "reset",
+            Op::Checkout(_) => "checkout",
             Op::Hunk { reverse: false, .. } => "stage hunk",
             Op::Hunk { reverse: true, .. } => "unstage hunk",
         }
@@ -321,6 +330,34 @@ pub fn log(repo: &Path, limit: usize) -> Result<Vec<Commit>, String> {
         .collect())
 }
 
+/// One line of `git reflog`: a place HEAD has been.
+pub struct ReflogEntry {
+    pub hash: String,
+    pub short: String,
+    /// What moved HEAD there, e.g. `commit: Fix typo` or `checkout: moving from main to dev`.
+    pub subject: String,
+    pub date: String,
+}
+
+/// The last `limit` positions of HEAD, newest first.
+pub fn reflog(repo: &Path, limit: usize) -> Result<Vec<ReflogEntry>, String> {
+    let n = format!("-n{limit}");
+    let out = run(repo, &["reflog", "show", "HEAD", &n, "--format=%H%x1f%h%x1f%gs%x1f%cr"])?;
+    Ok(out
+        .lines()
+        .filter_map(|l| {
+            let mut f = l.split('\x1f');
+            Some(ReflogEntry { hash: f.next()?.to_string(), short: f.next()?.to_string(), subject: f.next()?.to_string(), date: f.next()?.to_string() })
+        })
+        .collect())
+}
+
+/// The value git would use for `key` in `repo` (local settings first, then global).
+pub fn config_get(repo: &Path, key: &str) -> Option<String> {
+    let v = run(repo, &["config", "--get", key]).ok()?.trim().to_string();
+    (!v.is_empty()).then_some(v)
+}
+
 /// A local or remote-tracking branch.
 pub struct Branch {
     /// Short name: `main` or `origin/main`.
@@ -408,6 +445,11 @@ pub fn perform(repo: &Path, op: &Op) -> Result<String, String> {
         Op::Clone(_) if repo.read_dir().is_ok_and(|mut d| d.next().is_some()) => Err(format!("{} already exists and is not empty", repo.display())),
         Op::Clone(slug) => crate::github::clone(slug, repo),
         Op::Delete => delete_repo(repo),
+        Op::Amend(msg) if msg.is_empty() => run_all(repo, &["commit", "--amend", "--no-edit"]),
+        Op::Amend(msg) => run_all(repo, &["commit", "--amend", "-m", msg]),
+        Op::Reset(rev) | Op::Checkout(rev) if rev.is_empty() || rev.starts_with('-') => Err(format!("invalid target '{rev}'")),
+        Op::Reset(rev) => run_all(repo, &["reset", "--keep", rev]),
+        Op::Checkout(rev) => run_all(repo, &["checkout", rev, "--"]),
         Op::Hunk { patch, reverse } => apply_cached(repo, patch, *reverse),
         Op::DeleteBranch(name, force) => run_all(repo, &["branch", if *force { "-D" } else { "-d" }, "--", name]),
     }

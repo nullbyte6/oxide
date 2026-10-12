@@ -18,7 +18,7 @@ use ratatui::widgets::ListState;
 use crate::{
     config::{self, Config},
     diff::{self, Diff},
-    git::{Branch, Commit, DiffKind, Op},
+    git::{self, Branch, Commit, DiffKind, Op, ReflogEntry},
     github::{self, Ci, Item, Kind, RepoItem, State},
     logger::{self, Level, Logger},
     marks::{Mark, Marks},
@@ -210,6 +210,17 @@ pub struct HistoryView {
     id: u64,
 }
 
+/// The reflog of one repository: every place HEAD has been, for undoing mistakes.
+pub struct ReflogView {
+    pub repo: PathBuf,
+    pub name: String,
+    /// None while the reflog is loading.
+    pub entries: Option<Vec<ReflogEntry>>,
+    pub error: Option<String>,
+    pub state: ListState,
+    id: u64,
+}
+
 /// The branches of one repository.
 pub struct BranchView {
     pub repo: PathBuf,
@@ -308,6 +319,8 @@ pub enum InputKind {
     CloneTo,
     /// The repository's name, typed to confirm deleting it from disk.
     DeleteRepo,
+    /// Message for amending the last commit (empty keeps the old one).
+    Amend,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -324,6 +337,8 @@ pub enum Mode {
     History,
     /// The branch list (`App::branches`) is open.
     Branches,
+    /// The reflog (`App::reflog`) is open.
+    Reflog,
     /// The GitHub issue or pull request list (`App::gh`) is open.
     GitHub,
     /// An issue or pull request opened as text (`App::text`).
@@ -377,6 +392,12 @@ pub struct App {
     pub diff: Option<DiffView>,
     pub history: Option<HistoryView>,
     pub branches: Option<BranchView>,
+    pub reflog: Option<ReflogView>,
+    /// Why the next commit may be made with the wrong identity (shown next to the commit prompt).
+    pub commit_warn: Option<String>,
+    /// The message of the commit being made, and of the last one that failed (e.g. rejected by a hook).
+    pending_msg: Option<(PathBuf, String)>,
+    retry_msg: Option<(PathBuf, String)>,
     pub gh: Option<GhView>,
     pub text: Option<TextView>,
     pub finder: Option<FinderView>,
@@ -414,6 +435,44 @@ pub struct App {
     scan_paths: HashSet<PathBuf>,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
+}
+
+/// Conventional-commit types offered by Tab in the commit prompt.
+const COMMIT_TYPES: [&str; 11] = ["feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert"];
+
+/// Puts the next (or previous) conventional-commit type in front of the message, replacing the one it
+/// already starts with; `type(scope)!: subject` keeps its scope and bang.
+fn cycle_type(input: &mut String, forward: bool) {
+    let n = COMMIT_TYPES.len();
+    let parsed = input.split_once(": ").and_then(|(head, subject)| {
+        let (kind, tail) = head.split_at(head.find(['(', '!']).unwrap_or(head.len()));
+        let i = COMMIT_TYPES.iter().position(|t| *t == kind)?;
+        Some((i, tail.to_string(), subject.to_string()))
+    });
+    let (next, tail, subject) = match parsed {
+        Some((i, tail, subject)) => (if forward { (i + 1) % n } else { (i + n - 1) % n }, tail, subject),
+        None => (if forward { 0 } else { n - 1 }, String::new(), input.clone()),
+    };
+    *input = format!("{}{tail}: {subject}", COMMIT_TYPES[next]);
+}
+
+/// The first line of the repository's `commit.template` that is not empty or a comment.
+fn commit_template(repo: &Path) -> Option<String> {
+    let path = config::expand(&git::config_get(repo, "commit.template")?);
+    let text = std::fs::read_to_string(if path.is_relative() { repo.join(path) } else { path }).ok()?;
+    text.lines().find(|l| !l.trim().is_empty() && !l.starts_with('#')).map(str::to_string)
+}
+
+/// What the reflog's `u` does for entry `i`: the confirmation text and the operation that undoes it.
+/// A checkout goes back to the branch it came from; anything else moves the branch to where HEAD was before.
+fn undo_of(entries: &[ReflogEntry], i: usize) -> Option<(String, Op)> {
+    let e = entries.get(i)?;
+    if let Some(from) = e.subject.strip_prefix("checkout: moving from ").and_then(|r| r.split(" to ").next()) {
+        return Some((format!("undo \"{}\": check out {from} again?", e.subject), Op::Checkout(from.to_string())));
+    }
+    let before = entries.get(i + 1)?;
+    let prompt = format!("undo \"{}\": move the branch back to {}? uncommitted changes are kept", e.subject, before.short);
+    Some((prompt, Op::Reset(before.hash.clone())))
 }
 
 /// Moves a selection by `delta` inside `0..len`, clamping at both ends.
@@ -458,6 +517,10 @@ impl App {
             diff: None,
             history: None,
             branches: None,
+            reflog: None,
+            commit_warn: None,
+            pending_msg: None,
+            retry_msg: None,
             gh: None,
             text: None,
             finder: None,
@@ -627,6 +690,20 @@ impl App {
                         }
                     }
                 }
+                Msg::Reflog { id, result } => {
+                    if let Some(v) = self.reflog.as_mut().filter(|v| v.id == id) {
+                        match result {
+                            Ok(entries) => {
+                                // Keep the cursor on the same row after a reload (the newest entries shift it down).
+                                let keep = v.state.selected().unwrap_or(0).min(entries.len().saturating_sub(1));
+                                v.state.select(if entries.is_empty() { None } else { Some(keep) });
+                                v.entries = Some(entries);
+                                v.error = None;
+                            }
+                            Err(e) => v.error = Some(e),
+                        }
+                    }
+                }
                 Msg::GitHub { id, result } => {
                     if let Some(v) = self.gh.as_mut().filter(|v| v.id == id) {
                         match result {
@@ -699,6 +776,14 @@ impl App {
                     if result.is_ok() && label.ends_with("hunk") {
                         self.reload_diff(&path);
                     }
+                    if self.reflog.as_ref().is_some_and(|v| v.repo == path) {
+                        self.load_reflog(); // the operation added a line to the reflog
+                    }
+                    if label == "commit" {
+                        // A commit that failed (a hook said no) keeps its message for the next try.
+                        let pending = self.pending_msg.take().filter(|(p, _)| *p == path);
+                        self.retry_msg = if result.is_err() { pending } else { None };
+                    }
                     let name = dir_name(&path);
                     // A fetch started by the timer only speaks up when it fails, and only once per round.
                     if self.quiet.remove(&path) {
@@ -714,13 +799,16 @@ impl App {
                     match result {
                         Ok(out) => {
                             self.log(Level::Ok, format!("{name}: {label} ok"));
-                            for line in out.lines().filter(|l| !l.trim().is_empty()).take(3) {
+                            // Hook output (pre-commit, commit-msg ...) is part of a commit's result; show more of it.
+                            let shown = if matches!(label, "commit" | "amend") { 12 } else { 3 };
+                            for line in out.lines().filter(|l| !l.trim().is_empty()).take(shown) {
                                 self.log(Level::Info, format!("  {}", line.trim()));
                             }
                         }
                         Err(err) => {
                             self.log(Level::Error, format!("{name}: {label} failed"));
-                            for line in err.lines().filter(|l| !l.trim().is_empty()).take(6) {
+                            let shown = if matches!(label, "commit" | "amend") { 12 } else { 6 };
+                            for line in err.lines().filter(|l| !l.trim().is_empty()).take(shown) {
                                 self.log(Level::Error, format!("  {}", line.trim()));
                             }
                         }
@@ -888,6 +976,7 @@ impl App {
             Mode::Diff => self.on_diff_key(key),
             Mode::History => self.on_history_key(key),
             Mode::Branches => self.on_branch_key(key),
+            Mode::Reflog => self.on_reflog_key(key),
             Mode::GitHub => self.on_gh_key(key),
             Mode::Text => self.on_text_key(key),
             Mode::Finder => self.on_finder_key(key),
@@ -928,6 +1017,8 @@ impl App {
             KeyCode::Char('d') => self.open_diff(),
             KeyCode::Char('v') => self.open_history(),
             KeyCode::Char('b') => self.open_branches(),
+            KeyCode::Char('O') => self.open_reflog(),
+            KeyCode::Char('E') => self.open_amend(),
             KeyCode::Char('I') => self.open_init(),
             KeyCode::Char('i') => self.open_gh(Kind::Issues),
             KeyCode::Char('y') => self.open_gh(Kind::Pulls),
@@ -1063,6 +1154,118 @@ impl App {
             _ => return,
         };
         v.state.select(step(v.state.selected(), len, delta));
+    }
+
+    // ---- reflog ----
+
+    fn open_reflog(&mut self) {
+        let Some((repo, name)) = self.selected().map(|r| (r.path.clone(), r.name.clone())) else { return };
+        self.reflog = Some(ReflogView { repo, name, entries: None, error: None, state: ListState::default(), id: 0 });
+        self.mode = Mode::Reflog;
+        self.load_reflog();
+    }
+
+    fn load_reflog(&mut self) {
+        self.diff_id += 1;
+        if let Some(v) = self.reflog.as_mut() {
+            v.id = self.diff_id;
+            worker::spawn_reflog(v.repo.clone(), v.id, self.tx.clone());
+        }
+    }
+
+    fn on_reflog_key(&mut self, key: KeyEvent) {
+        let Some(v) = self.reflog.as_mut() else {
+            self.mode = Mode::Normal;
+            return;
+        };
+        let len = v.entries.as_ref().map_or(0, Vec::len);
+        let repo = v.repo.clone();
+        let picked = v.state.selected().and_then(|i| Some((i, v.entries.as_ref()?.get(i)?)));
+        let delta = match key.code {
+            KeyCode::Esc | KeyCode::Char('q' | 'O') => {
+                self.reflog = None;
+                self.mode = Mode::Normal;
+                return;
+            }
+            KeyCode::Down | KeyCode::Char('j') => 1,
+            KeyCode::Up | KeyCode::Char('k') => -1,
+            KeyCode::PageDown | KeyCode::Char(' ') => 15,
+            KeyCode::PageUp | KeyCode::Char('b') => -15,
+            KeyCode::Home | KeyCode::Char('g') => -(1 << 30),
+            KeyCode::End | KeyCode::Char('G') => 1 << 30,
+            // Undo: go back to how things were before the highlighted entry happened.
+            KeyCode::Char('u') => {
+                let undo = picked.and_then(|(i, _)| undo_of(v.entries.as_deref()?, i));
+                match undo {
+                    Some((prompt, op)) => self.ask(prompt, vec![(repo, op)]),
+                    None => self.log(Level::Warn, "nothing earlier in the reflog to go back to"),
+                }
+                return;
+            }
+            // Restore: move the branch to the highlighted entry's commit.
+            KeyCode::Enter => {
+                if let Some((_, e)) = picked {
+                    let prompt = format!("move the current branch to {} ({})? uncommitted changes are kept", e.short, e.subject);
+                    let hash = e.hash.clone();
+                    self.ask(prompt, vec![(repo, Op::Reset(hash))]);
+                }
+                return;
+            }
+            KeyCode::Char('d') => {
+                if let Some((_, e)) = picked {
+                    let hash = e.hash.clone();
+                    self.start_diff(repo, hash, DiffKind::Commit, false, Mode::Reflog);
+                }
+                return;
+            }
+            _ => return,
+        };
+        v.state.select(step(v.state.selected(), len, delta));
+    }
+
+    // ---- commit helpers ----
+
+    /// Prompts for the new message of the last commit; staged changes are folded into it.
+    fn open_amend(&mut self) {
+        let Some((has_commit, pushed)) = self.selected().map(|r| (r.commit_time > 0, r.upstream.is_some() && r.ahead == 0)) else { return };
+        if !has_commit {
+            self.log(Level::Warn, "no commit to amend");
+            return;
+        }
+        if pushed {
+            self.log(Level::Warn, "the last commit is already pushed: after amending it, publishing needs a force push");
+        }
+        self.open_input(InputKind::Amend);
+        self.commit_warn = self.identity_warning();
+    }
+
+    /// Prefills the commit prompt with the message of a commit that just failed, else the first line of the
+    /// repository's `commit.template`, and checks the identity the commit will be made with.
+    fn prefill_commit(&mut self) {
+        let Some(path) = self.selected().map(|r| r.path.clone()) else { return };
+        if let Some((_, msg)) = self.retry_msg.take().filter(|(p, _)| *p == path) {
+            self.input = msg;
+            self.log(Level::Info, "the message of the failed commit is restored");
+        } else if let Some(line) = commit_template(&path) {
+            self.input = line;
+        }
+        self.commit_warn = self.identity_warning();
+    }
+
+    /// Explains why a commit made now may carry the wrong e-mail address, or None when it looks right.
+    /// The expected addresses are the `email` entries of the config, else the global `user.email`.
+    fn identity_warning(&self) -> Option<String> {
+        let r = self.selected()?;
+        let expected: Vec<String> = if self.cfg.emails.is_empty() {
+            git::global_config("user.email").map(|e| e.to_lowercase()).into_iter().collect()
+        } else {
+            self.cfg.emails.clone()
+        };
+        match git::config_get(&r.path, "user.email") {
+            None => Some("no user.email is set".to_string()),
+            Some(e) if !expected.is_empty() && !expected.contains(&e.to_lowercase()) => Some(format!("committing as {e}, expected {}", expected.join(" or "))),
+            Some(_) => None,
+        }
     }
 
     // ---- branches ----
@@ -1603,6 +1806,10 @@ impl App {
                 }
             }
             KeyCode::Enter => self.submit(kind),
+            // In a commit message, Tab walks through the conventional-commit types (feat, fix, docs ...).
+            KeyCode::Tab | KeyCode::BackTab if matches!(kind, InputKind::Commit | InputKind::Amend) => {
+                cycle_type(&mut self.input, key.code == KeyCode::Tab);
+            }
             KeyCode::Backspace => {
                 self.input.pop();
                 self.sync_search(kind);
@@ -1637,7 +1844,10 @@ impl App {
         match self.selected().map(|r| r.staged()) {
             None => {}
             Some(0) => self.log(Level::Warn, "nothing staged to commit (stage files with Space or a)"),
-            Some(_) => self.open_input(InputKind::Commit),
+            Some(_) => {
+                self.open_input(InputKind::Commit);
+                self.prefill_commit();
+            }
         }
     }
 
@@ -1661,7 +1871,11 @@ impl App {
             }
             InputKind::Search => {} // already applied while typing
             InputKind::Commit if text.is_empty() => self.log(Level::Warn, "empty commit message, commit cancelled"),
-            InputKind::Commit => self.op_selected(Op::Commit(text)),
+            InputKind::Commit => {
+                self.pending_msg = self.selected().map(|r| (r.path.clone(), text.clone()));
+                self.op_selected(Op::Commit(text));
+            }
+            InputKind::Amend => self.op_selected(Op::Amend(text)),
             InputKind::Merge => self.op_selected(Op::Merge(text)),
         }
     }

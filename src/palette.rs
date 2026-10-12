@@ -22,6 +22,8 @@ pub const ENTRIES: &[Entry] = &[
     e("Commit staged changes", "c", 'c'),
     e("Show the diff of the highlighted file", "d", 'd'),
     e("Show the commit log", "v", 'v'),
+    e("Amend the last commit", "E", 'E'),
+    e("Reflog: see and undo what happened to HEAD", "O", 'O'),
     e("Manage branches", "b", 'b'),
     e("Merge a branch into the current one", "m", 'm'),
     e("GitHub issues of this repository", "i", 'i'),
