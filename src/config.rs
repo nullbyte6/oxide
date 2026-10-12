@@ -2,7 +2,7 @@
 //!
 //! The optional config file (`$XDG_CONFIG_HOME/oxide/config`, falling back to
 //! `~/.config/oxide/config`) is a list of `key = value` lines; `#` starts a comment.
-//! Supported keys: `root` (repeatable), `owner` (repeatable), `depth`, and the repeatable `pin` and
+//! Supported keys: `root` (repeatable), `owner` (repeatable), `depth`, `color` (`on` / `off`), and the repeatable `pin` and
 //! `ignore` (a repository directory name, or a path when the value contains `/` or starts with `~`).
 
 use std::{
@@ -22,6 +22,8 @@ pub struct Config {
     pub owners: Vec<String>,
     /// Maximum scan depth below each root.
     pub depth: usize,
+    /// Whether accent colors are drawn (`color = on|off`; off by default when `NO_COLOR` is set).
+    pub color: bool,
     /// Repositories always listed first (directory names or paths from `pin` entries).
     pub pins: Vec<String>,
     /// Repositories hidden from the list (directory names or paths from `ignore` entries).
@@ -113,6 +115,7 @@ impl Config {
         let mut owners = Vec::new();
         let mut depth = DEFAULT_DEPTH;
         let (mut pins, mut ignores) = (Vec::new(), Vec::new());
+        let mut color = env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
 
         if let Ok(text) = fs::read_to_string(config_file()) {
             for line in text.lines() {
@@ -123,6 +126,11 @@ impl Config {
                     "root" => roots.push(expand(val)),
                     "owner" => owners.push(val.to_lowercase()),
                     "depth" => depth = val.parse().unwrap_or(depth),
+                    "color" => match val.to_lowercase().as_str() {
+                        "on" | "true" | "yes" | "1" => color = true,
+                        "off" | "false" | "no" | "0" => color = false,
+                        _ => {}
+                    },
                     "pin" => pins.push(val.to_string()),
                     "ignore" => ignores.push(val.to_string()),
                     _ => {} // comments, blank lines and unknown keys
@@ -147,6 +155,6 @@ impl Config {
         owners.sort();
         owners.dedup();
 
-        Config { roots, owners, depth, pins, ignores, cross_devices: explicit }
+        Config { roots, owners, depth, color, pins, ignores, cross_devices: explicit }
     }
 }

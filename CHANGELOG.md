@@ -18,6 +18,7 @@ All notable changes to Oxide are recorded here, newest version first.
 - Add pinned and ignored repositories: `pin` / `ignore` config entries, `*` / `x` keys that save to a `marks` state file, and `H` to show ignored ones.
 - Add stash and stash pop (`z` / `Z`) with a `$n` stash counter on rows and in the details pane.
 - Add `e` / `t` / `o` keys to open the selected file or repository in `$VISUAL` / `$EDITOR`, a shell or the file manager.
+- Add a color layer on top of the monochrome design: accent hues for focus, branches, owned/ahead/staged, modified, behind/conflicts/errors, untracked files and running operations, plus the banner's original colors. The weights, symbols and inverse selection stay as they were, so the monochrome look is unchanged with colors off. Toggle with `C`, `color = on|off` in the config, or `NO_COLOR`.
 - Add bulk pull (`L`) and bulk push (`U`, asks for confirmation) for the repositories in view.
 
 ### Fixed

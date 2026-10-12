@@ -1,7 +1,11 @@
 //! Rendering of the dashboard with Ratatui.
 //!
-//! The design is monochrome: one ink color on the terminal's own background. Hierarchy and
-//! state come from bold, dim and inverse text, thick borders and symbols, never from hues.
+//! The design is monochrome at its core: one ink color on the terminal's own background. Hierarchy
+//! and state come from bold, dim and inverse text, thick borders and symbols. Colors are an optional
+//! layer on top (`hue`): every colored span keeps the weight and symbol it has without color, so
+//! turning colors off (`C`, `color = off` or `NO_COLOR`) leaves the monochrome look unchanged.
+
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use ratatui::{
     Frame,
@@ -21,9 +25,25 @@ use crate::{
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-/// The one color of the whole interface. `Reset` is the terminal's own foreground;
+/// The base color of the whole interface. `Reset` is the terminal's own foreground;
 /// set any other color here to recolor all of Oxide at once.
 const INK: Color = Color::Reset;
+
+/// Accent hues of the color layer. They are the terminal's ANSI colors, so they follow its theme.
+const ACCENT: Color = Color::Cyan; // focus, branch names, the logo
+const GOOD: Color = Color::Green; // owned, ahead, staged, added, success
+const WARN: Color = Color::Yellow; // modified, dirty, warnings, pins
+const BAD: Color = Color::Red; // behind, conflicts, deleted, errors
+const INFO: Color = Color::Blue; // untracked files, search
+const PINK: Color = Color::Magenta; // running operations, stashes
+
+/// Whether `hue` draws colors; set from `App::color` at the start of every frame.
+static COLOR: AtomicBool = AtomicBool::new(true);
+
+/// `style` in the accent color `c`, or unchanged when colors are off.
+fn hue(style: Style, c: Color) -> Style {
+    if COLOR.load(Ordering::Relaxed) { style.fg(c) } else { style }
+}
 
 const PLAIN: Style = Style::new().fg(INK);
 const BOLD: Style = PLAIN.add_modifier(Modifier::BOLD);
@@ -50,6 +70,7 @@ const SIDE_PAD: u16 = 1;
 const MIN_DASHBOARD_ROWS: u16 = 24;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
+    COLOR.store(app.color, Ordering::Relaxed);
     // Paint the ink color over the whole screen so text without an explicit style uses it too.
     f.render_widget(Block::new().style(PLAIN), f.area());
 
@@ -61,7 +82,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         let [banner_area, rest] = Layout::vertical([Constraint::Length(banner_h), Constraint::Min(0)]).spacing(GAP_Y).areas(area);
         // Center the art as one block so its lines stay aligned with each other.
         let [_, art, _] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(banner.width), Constraint::Fill(1)]).areas(banner_area);
-        f.render_widget(Paragraph::new(banner.lines.clone()), art);
+        let lines = if app.color { &banner.color_lines } else { &banner.lines };
+        f.render_widget(Paragraph::new(lines.clone()), art);
         area = rest;
     }
 
@@ -83,7 +105,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 /// Panel frame: a thick bold border while the pane has focus, a thin dim one otherwise.
 /// The title sits in a `─┤ title ├─` notch.
 fn pane(title: String, focused: bool) -> Block<'static> {
-    let (border, style) = if focused { (BorderType::Thick, BOLD) } else { (BorderType::Plain, DIM) };
+    let (border, style) = if focused { (BorderType::Thick, hue(BOLD, ACCENT)) } else { (BorderType::Plain, DIM) };
     let title = Line::from(vec![
         Span::styled("─┤ ", style),
         Span::styled(title.trim().to_string(), style),
@@ -123,24 +145,30 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     // Right side, left to right: search, running operations, scan progress, totals.
     let mut right = Vec::new();
     if !app.search.is_empty() {
-        right.push(Span::styled(format!(" /{} ", app.search), BOLD));
+        right.push(Span::styled(format!(" /{} ", app.search), hue(BOLD, INFO)));
     }
     if !app.busy.is_empty() {
-        right.push(Span::styled(format!(" {spin} {} running ", app.busy.len()), BOLD));
+        right.push(Span::styled(format!(" {spin} {} running ", app.busy.len()), hue(BOLD, PINK)));
     }
     match app.scan {
-        Some((_, 0)) => right.push(Span::styled(format!(" {spin} discovering "), BOLD)),
-        Some((done, total)) => right.push(Span::styled(format!(" {spin} scanning {} {done}/{total} ", bar(done, total, 10)), BOLD)),
+        Some((_, 0)) => right.push(Span::styled(format!(" {spin} discovering "), hue(BOLD, ACCENT))),
+        Some((done, total)) => right.push(Span::styled(format!(" {spin} scanning {} {done}/{total} ", bar(done, total, 10)), hue(BOLD, ACCENT))),
         None => {}
     }
-    right.push(Span::styled(format!(" {} repos · {dirty} dirty · {ahead} ahead · {behind} behind ", app.listed().count()), DIM));
+    // Totals: each non-zero count takes its hue, zero counts stay dim.
+    right.push(Span::styled(format!(" {} repos", app.listed().count()), DIM));
+    for (n, label, color) in [(dirty, "dirty", WARN), (ahead, "ahead", GOOD), (behind, "behind", BAD)] {
+        right.push(Span::styled(" · ", DIM));
+        right.push(Span::styled(format!("{n} {label}"), if n == 0 { DIM } else { hue(PLAIN, color) }));
+    }
+    right.push(Span::styled(" ", DIM));
 
     let block = Block::bordered()
         .padding(Padding::horizontal(SIDE_PAD))
         .border_style(DIM)
         .title(Line::from(vec![
             Span::styled("─┤ ", DIM),
-            Span::styled("◆ OXIDE", BOLD),
+            Span::styled("◆ OXIDE", hue(BOLD, ACCENT)),
             Span::styled(format!(" v{}", env!("CARGO_PKG_VERSION")), DIM),
             Span::styled(" ├", DIM),
         ]))
@@ -167,7 +195,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
 fn repo_row(r: &Repo, busy: Option<&str>, tick: usize, name_w: usize) -> ListItem<'static> {
     // Cloned repositories are dimmed so owned ones stand out.
     let (badge, badge_style) = match r.owner {
-        Owner::Owned => ("own  ", PLAIN),
+        Owner::Owned => ("own  ", hue(PLAIN, GOOD)),
         Owner::Cloned => ("clone", DIM),
     };
     // The two columns left of the name are breathing room inside the selection bar; they also hold
@@ -180,29 +208,36 @@ fn repo_row(r: &Repo, busy: Option<&str>, tick: usize, name_w: usize) -> ListIte
         "  "
     };
     let mut spans = vec![
-        Span::styled(mark, if r.ignored { DIM } else { BOLD }),
+        Span::styled(mark, if r.ignored { DIM } else { hue(BOLD, WARN) }),
         Span::styled(fit(&r.name, name_w), BOLD),
         Span::raw(" "),
         Span::styled(badge, badge_style),
         Span::raw(" "),
-        Span::styled(fit(&r.branch, 14), PLAIN),
+        Span::styled(fit(&r.branch, 14), hue(PLAIN, ACCENT)),
         Span::raw(" "),
     ];
     if r.ahead > 0 {
-        spans.push(Span::styled(format!("↑{} ", r.ahead), PLAIN));
+        spans.push(Span::styled(format!("↑{} ", r.ahead), hue(PLAIN, GOOD)));
     }
     if r.behind > 0 {
-        spans.push(Span::styled(format!("↓{} ", r.behind), PLAIN));
+        spans.push(Span::styled(format!("↓{} ", r.behind), hue(PLAIN, BAD)));
     }
     if let Some(label) = busy {
-        spans.push(Span::styled(format!("{} {label}… ", SPINNER[tick % SPINNER.len()]), BOLD));
+        spans.push(Span::styled(format!("{} {label}… ", SPINNER[tick % SPINNER.len()]), hue(BOLD, PINK)));
     }
     if r.error.is_some() {
-        spans.push(Span::styled("error", BOLD));
+        spans.push(Span::styled("error", hue(BOLD, BAD)));
     }
-    for (n, sym) in [(r.conflicts(), "!"), (r.staged(), "+"), (r.unstaged(), "~"), (r.untracked(), "?"), (r.stashes as usize, "$")] {
+    let counters = [
+        (r.conflicts(), "!", BAD),
+        (r.staged(), "+", GOOD),
+        (r.unstaged(), "~", WARN),
+        (r.untracked(), "?", INFO),
+        (r.stashes as usize, "$", PINK),
+    ];
+    for (n, sym, color) in counters {
         if n > 0 {
-            spans.push(Span::styled(format!("{sym}{n} "), PLAIN));
+            spans.push(Span::styled(format!("{sym}{n} "), hue(PLAIN, color)));
         }
     }
     ListItem::new(Line::from(spans))
@@ -234,28 +269,40 @@ fn draw_repos(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(list, area, &mut app.repo_state);
 }
 
+/// Hue of a git status letter.
+fn status_color(c: char) -> Color {
+    match c {
+        'A' => GOOD,
+        'M' | 'T' => WARN,
+        'D' | 'U' => BAD,
+        'R' | 'C' => ACCENT,
+        _ => INFO,
+    }
+}
+
 /// `XY path`: the index letter is bold when staged, untracked files are dimmed.
 fn file_row(e: &FileEntry) -> ListItem<'static> {
     if e.untracked() {
-        return ListItem::new(Line::from(Span::styled(format!("?? {}", e.path), DIM)));
+        return ListItem::new(Line::from(Span::styled(format!("?? {}", e.path), hue(DIM, INFO))));
     }
     let x_style = if e.staged() || e.conflict() { BOLD } else { PLAIN };
+    let color = if e.conflict() { BAD } else { status_color(e.x) };
     ListItem::new(Line::from(vec![
-        Span::styled(e.x.to_string(), x_style),
-        Span::styled(e.y.to_string(), PLAIN),
+        Span::styled(e.x.to_string(), hue(x_style, color)),
+        Span::styled(e.y.to_string(), hue(PLAIN, status_color(e.y))),
         Span::styled(format!(" {}", e.path), PLAIN),
     ]))
 }
 
 /// A counter that is dimmed while it is zero, so only non-zero values stand out.
-fn count_span(n: usize, prefix: &str, suffix: &str) -> Span<'static> {
-    Span::styled(format!("{prefix}{n}{suffix}"), if n == 0 { DIM } else { BOLD })
+fn count_span(n: usize, prefix: &str, suffix: &str, color: Color) -> Span<'static> {
+    Span::styled(format!("{prefix}{n}{suffix}"), if n == 0 { DIM } else { hue(BOLD, color) })
 }
 
 /// `<hash> <subject> (<relative date>)` with the hash dimmed.
 fn commit_line(commit: &str, label: Span<'static>) -> Line<'static> {
     match commit.split_once(' ') {
-        Some((hash, rest)) => Line::from(vec![label, Span::styled(format!("{hash} "), DIM), Span::styled(rest.to_string(), PLAIN)]),
+        Some((hash, rest)) => Line::from(vec![label, Span::styled(format!("{hash} "), hue(DIM, WARN)), Span::styled(rest.to_string(), PLAIN)]),
         None => Line::from(vec![label, Span::styled(commit.to_string(), DIM)]),
     }
 }
@@ -274,7 +321,7 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
         Line::from(vec![label("path"), Span::styled(r.path.display().to_string(), ITALIC)]),
         Line::from(vec![
             label("branch"),
-            Span::styled(r.branch.clone(), BOLD),
+            Span::styled(r.branch.clone(), hue(BOLD, ACCENT)),
             Span::styled(
                 match &r.upstream {
                     Some(u) => format!("  → {u}"),
@@ -284,27 +331,30 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
             ),
         ]),
         Line::from(vec![label("remote"), Span::styled(r.remote.clone().unwrap_or_else(|| "none (local only)".into()), ITALIC)]),
-        Line::from(vec![label("owner"), Span::styled(if r.owner == Owner::Owned { "owned" } else { "cloned" }, PLAIN)]),
+        Line::from(vec![
+            label("owner"),
+            if r.owner == Owner::Owned { Span::styled("owned", hue(PLAIN, GOOD)) } else { Span::styled("cloned", PLAIN) },
+        ]),
         Line::from(vec![
             label("sync"),
-            count_span(r.ahead as usize, "↑", " ahead"),
+            count_span(r.ahead as usize, "↑", " ahead", GOOD),
             Span::raw("  "),
-            count_span(r.behind as usize, "↓", " behind"),
+            count_span(r.behind as usize, "↓", " behind", BAD),
         ]),
         Line::from(vec![
             label("changes"),
-            count_span(r.staged(), "", " staged"),
+            count_span(r.staged(), "", " staged", GOOD),
             Span::styled(" · ", DIM),
-            count_span(r.unstaged(), "", " modified"),
+            count_span(r.unstaged(), "", " modified", WARN),
             Span::styled(" · ", DIM),
-            count_span(r.untracked(), "", " untracked"),
+            count_span(r.untracked(), "", " untracked", INFO),
             Span::styled(" · ", DIM),
-            count_span(r.stashes as usize, "", " stashed"),
+            count_span(r.stashes as usize, "", " stashed", PINK),
         ]),
         commit_line(&r.last_commit, label("commit")),
     ];
     if let Some(e) = &r.error {
-        lines.push(Line::from(Span::styled(format!("error: {}", e.lines().next().unwrap_or("")), BOLD)));
+        lines.push(Line::from(Span::styled(format!("error: {}", e.lines().next().unwrap_or("")), hue(BOLD, BAD))));
     }
     f.render_widget(Paragraph::new(lines).block(pane(format!(" {} ", r.name), false)), info_area);
 
@@ -328,9 +378,9 @@ fn draw_log(f: &mut Frame, app: &App, area: Rect) {
             // Level is shown by a symbol and weight: dim info, plain ok, bold warnings and errors.
             let (sym, style) = match l.level {
                 Level::Info => ("  ", DIM),
-                Level::Ok => ("✓ ", PLAIN),
-                Level::Warn => ("! ", BOLD),
-                Level::Error => ("✗ ", BOLD),
+                Level::Ok => ("✓ ", hue(PLAIN, GOOD)),
+                Level::Warn => ("! ", hue(BOLD, WARN)),
+                Level::Error => ("✗ ", hue(BOLD, BAD)),
             };
             // Entries fade out as they age: only the newest three keep their full weight.
             let age = app.log.len() - start - 1 - i;
@@ -353,7 +403,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             InputKind::Search => "search".to_string(),
         };
         let line = Line::from(vec![
-            Span::styled(format!(" {prompt} ▸ "), BOLD),
+            Span::styled(format!(" {prompt} ▸ "), hue(BOLD, ACCENT)),
             Span::styled(app.input.clone(), PLAIN),
             Span::styled("█", PLAIN),
         ]);
@@ -363,7 +413,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
 
     if app.mode == Mode::Confirm {
         let prompt = app.confirm.as_ref().map_or("", |c| c.prompt.as_str());
-        let line = Line::from(vec![Span::styled(format!(" {prompt} "), BOLD), Span::styled("y", KEYCAP), Span::styled(" yes   any other key cancels", DIM)]);
+        let line = Line::from(vec![Span::styled(format!(" {prompt} "), hue(BOLD, WARN)), Span::styled(" y ", hue(KEYCAP, WARN)), Span::styled(" yes   any other key cancels", DIM)]);
         f.render_widget(Paragraph::new(line), area);
         return;
     }
@@ -385,7 +435,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     ];
     let mut spans = Vec::new();
     for (key, what) in hints {
-        spans.push(Span::styled(format!(" {key} "), KEYCAP));
+        spans.push(Span::styled(format!(" {key} "), hue(KEYCAP, ACCENT)));
         spans.push(Span::styled(format!(" {what}  "), DIM));
     }
     f.render_widget(Paragraph::new(Line::from(spans)), area);
@@ -418,7 +468,7 @@ fn draw_help(f: &mut Frame) {
     ];
     let lines: Vec<Line> = rows
         .iter()
-        .map(|(k, d)| Line::from(vec![Span::styled(format!("{k:<16}"), BOLD), Span::styled(*d, PLAIN)]))
+        .map(|(k, d)| Line::from(vec![Span::styled(format!("{k:<16}"), hue(BOLD, ACCENT)), Span::styled(*d, PLAIN)]))
         .collect();
 
     let area = f.area();
@@ -430,7 +480,11 @@ fn draw_help(f: &mut Frame) {
     let block = Block::bordered()
         .border_type(BorderType::Double)
         .padding(Padding::horizontal(SIDE_PAD))
-        .border_style(BOLD)
-        .title(Line::from(vec![Span::styled("═╡ ", BOLD), Span::styled("◆ OXIDE keys", BOLD), Span::styled(" ╞", BOLD)]));
+        .border_style(hue(BOLD, ACCENT))
+        .title(Line::from(vec![
+            Span::styled("═╡ ", hue(BOLD, ACCENT)),
+            Span::styled("◆ OXIDE keys", hue(BOLD, ACCENT)),
+            Span::styled(" ╞", hue(BOLD, ACCENT)),
+        ]));
     f.render_widget(Paragraph::new(lines).block(block), popup);
 }

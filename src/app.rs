@@ -172,6 +172,8 @@ pub struct App {
     pub sort: Sort,
     /// Show ignored repositories too (marked in the list).
     pub show_hidden: bool,
+    /// Accent colors on top of the monochrome design (toggled with `C`).
+    pub color: bool,
     pub search: String,
     /// Text typed into the input line while in `Mode::Input`.
     pub input: String,
@@ -205,6 +207,7 @@ fn step(cur: Option<usize>, len: usize, delta: isize) -> Option<usize> {
 impl App {
     pub fn new(cfg: Config) -> App {
         let (tx, rx) = mpsc::channel();
+        let color = cfg.color;
         App {
             marks: Marks::load(&cfg),
             cfg: Arc::new(cfg),
@@ -217,6 +220,7 @@ impl App {
             filter: Filter::All,
             sort: Sort::Name,
             show_hidden: false,
+            color,
             search: String::new(),
             input: String::new(),
             log: Vec::new(),
@@ -418,6 +422,10 @@ impl App {
             KeyCode::Char('3') => self.set_filter(Filter::Cloned),
             KeyCode::Char('4') => self.set_filter(Filter::Attention),
             KeyCode::Char('s') => self.cycle_sort(),
+            KeyCode::Char('C') => {
+                self.color = !self.color;
+                self.log(Level::Info, if self.color { "colors on" } else { "colors off" });
+            }
             KeyCode::Char('H') => {
                 self.show_hidden = !self.show_hidden;
                 self.rebuild();

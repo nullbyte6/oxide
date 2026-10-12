@@ -71,6 +71,7 @@ oxide [OPTIONS] [PATH...]
 | `s` | Sort: name / recent / changes / behind (pinned repositories always come first) |
 | `*` / `x` | Pin / ignore the selected repository |
 | `H` | Show ignored repositories (marked `⊘`) |
+| `C` | Toggle colors |
 | `/` | Search (live); `Esc` clears |
 | `Space` / `Enter` | Stage or unstage the highlighted file |
 | `a` / `u` | Stage all / unstage all |
@@ -95,8 +96,14 @@ Row symbols: `↑n` ahead, `↓n` behind, `+` staged, `~` modified, `?` untracke
 
 ## Design
 
-Oxide is monochrome: a single ink color on your terminal's own background. Hierarchy comes
-from bold, dim, italic and inverse text rather than hues:
+Oxide's design is monochrome at its core: a single ink color on your terminal's own background,
+with hierarchy from bold, dim, italic and inverse text. On top of it sits an optional **color
+layer** of accent hues (ANSI colors, so they follow your terminal theme): cyan for focus, branches
+and the logo, green for owned/ahead/staged, yellow for modified and warnings, red for behind,
+conflicts and errors, blue for untracked files, magenta for running operations and stashes. Every
+colored element keeps the weight and symbol it has without color, so nothing depends on hue.
+Press `C` to toggle colors, set `color = off` in the config, or export `NO_COLOR`. The selected row
+stays plain inverse.
 
 - **Spacing**: side-by-side panels are 1 empty column apart and stacked panels touch (no empty
   row), which look equal because terminal cells are about twice as tall as wide. The focused
@@ -108,9 +115,10 @@ from bold, dim, italic and inverse text rather than hues:
   entries fade as they age (the newest three keep full weight).
 - **Key caps** in the footer, `─┤ title ├─` notches on panel titles, a double-border help window.
 
-To recolor everything, change `INK` in [`src/ui.rs`](src/ui.rs) (the default is the terminal's
-own foreground). `GAP_X`, `GAP_Y` and `SIDE_PAD` tune the gaps and the inner side padding of panels. The banner follows the
-same rule.
+To recolor the base, change `INK` in [`src/ui.rs`](src/ui.rs) (the default is the terminal's
+own foreground); the accent hues are the `ACCENT`, `GOOD`, `WARN`, `BAD`, `INFO` and `PINK` constants
+next to it. `GAP_X`, `GAP_Y` and `SIDE_PAD` tune the gaps and the inner side padding of panels. The
+banner has a monochrome and a colored version and follows the same switch.
 
 ## Owned vs cloned
 
@@ -136,6 +144,9 @@ owner = my-company
 
 # how many directory levels below each root are searched
 depth = 6
+
+# accent colors on top of the monochrome design (on or off; off by default when NO_COLOR is set)
+color = on
 
 # repositories listed first / hidden: a directory name, or a path (a value with a "/" or a leading "~"
 # also covers every repository below it)
@@ -168,8 +179,9 @@ file when it is built and converts its colors itself; the script is never run. P
 it in any terminal with `bash src/banner.sh`.
 
 - Every art line must be `echo -e "..."`; other lines in the file are ignored.
-- The art's colors are flattened to the single ink color: bold and bright colors (`97`, `91`-`96`)
-  render bold, dark ones (`30`, `34`, `90`) dim, the rest normal. Background colors are ignored.
+- With colors off, the art's colors are flattened to the single ink color: bold and bright colors
+  (`97`, `91`-`96`) render bold, dark ones (`30`, `34`, `90`) dim, the rest normal, and background
+  colors are ignored. With colors on, the art keeps its own foreground and background colors.
 - Edit the script and rebuild to change the banner.
 - The banner is hidden when the terminal is narrower than the art or has fewer than
   24 rows to spare, so the dashboard always keeps its space.
@@ -199,7 +211,7 @@ run in batch mode unless you set `core.sshCommand`, `GIT_SSH_COMMAND` or `GIT_SS
 | `src/config.rs` | Config file, roots and owner names |
 | `src/marks.rs` | Pinned and ignored repositories (config entries and state file) |
 | `src/logger.rs` | Persistent log file |
-| `src/banner.rs` | Turns `src/banner.sh` into monochrome Ratatui lines |
+| `src/banner.rs` | Turns `src/banner.sh` into monochrome and colored Ratatui lines |
 | `src/banner.sh` | The ASCII banner art shown on top of the dashboard |
 
 ## Versioning
