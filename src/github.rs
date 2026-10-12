@@ -291,3 +291,47 @@ pub fn pr_diff(slug: &str, number: u64) -> Result<String, String> {
 pub fn checkout(repo: &Path, number: u64) -> Result<String, String> {
     gh_all(Some(repo), &["pr", "checkout", &number.to_string()])
 }
+
+/// State of the newest GitHub Actions run of a branch.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Ci {
+    Passing,
+    Failing,
+    /// Queued or in progress.
+    Running,
+    /// Cancelled, skipped or otherwise inconclusive.
+    Other,
+}
+
+impl Ci {
+    pub fn label(self) -> &'static str {
+        match self {
+            Ci::Passing => "passing",
+            Ci::Failing => "failing",
+            Ci::Running => "running",
+            Ci::Other => "inconclusive",
+        }
+    }
+}
+
+/// The newest workflow run of `branch` in `slug`; None when the branch has no runs (or Actions is off).
+pub fn ci_status(slug: &str, branch: &str) -> Result<Option<Ci>, String> {
+    if branch.is_empty() || branch.starts_with(['-', '(']) {
+        return Ok(None); // detached HEAD or a name `gh` would read as an option
+    }
+    let jq = r#".[]|[.status,(.conclusion//"")]|@tsv"#;
+    let out = gh(None, &["run", "list", "-R", slug, "--branch", branch, "--limit", "1", "--json", "status,conclusion", "--jq", jq])?;
+    let Some((status, conclusion)) = out.lines().next().and_then(|l| l.split_once('\t')) else { return Ok(None) };
+    Ok(Some(match (status, conclusion) {
+        ("completed", "success") => Ci::Passing,
+        ("completed", "failure" | "timed_out" | "startup_failure") => Ci::Failing,
+        ("completed", _) => Ci::Other,
+        _ => Ci::Running,
+    }))
+}
+
+/// True for `gh` errors that will repeat for every repository (not installed, not logged in), so a batch stops.
+pub fn is_fatal(err: &str) -> bool {
+    let e = err.to_lowercase();
+    e.contains("not installed") || e.contains("gh auth login") || e.contains("authentication") || e.contains("cannot run gh")
+}

@@ -20,7 +20,7 @@ use crate::{
     banner,
     diff::{Row, Sign},
     git::{Branch, DiffKind, FileEntry},
-    github::Kind,
+    github::{Ci, Kind},
     logger::{self, Level},
     palette,
     repo::{Health, Owner, Repo},
@@ -161,6 +161,15 @@ fn bar(done: usize, total: usize, width: usize) -> String {
     format!("{}{}", "▰".repeat(filled), "▱".repeat(width - filled))
 }
 
+/// `30s`, `10m` or `2h` for a number of seconds.
+fn interval(secs: u64) -> String {
+    match secs {
+        s if s % 3600 == 0 => format!("{}h", s / 3600),
+        s if s % 60 == 0 => format!("{}m", s / 60),
+        s => format!("{s}s"),
+    }
+}
+
 fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let dirty = app.listed().filter(|r| r.health() != Health::Clean).count();
     let ahead = app.listed().filter(|r| r.ahead > 0).count();
@@ -181,6 +190,9 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         None => {}
     }
     // Totals: each non-zero count takes its hue, zero counts stay dim.
+    if app.cfg.autofetch > 0 {
+        right.push(Span::styled(format!(" ⟳ {} ", interval(app.cfg.autofetch)), DIM));
+    }
     right.push(Span::styled(format!(" {} repos", app.listed().count()), DIM));
     for (n, label, color) in [(dirty, "dirty", WARN), (ahead, "ahead", GOOD), (behind, "behind", BAD)] {
         right.push(Span::styled(" · ", DIM));
@@ -217,7 +229,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(tabs, inner);
 }
 
-fn repo_row(r: &Repo, busy: Option<&str>, tick: usize, name_w: usize) -> ListItem<'static> {
+fn repo_row(r: &Repo, busy: Option<&str>, ci: Option<Ci>, tick: usize, name_w: usize) -> ListItem<'static> {
     // Cloned repositories are dimmed so owned ones stand out.
     let (badge, badge_style) = match r.owner {
         Owner::Owned => ("own  ", hue(PLAIN, GOOD)),
@@ -240,6 +252,7 @@ fn repo_row(r: &Repo, busy: Option<&str>, tick: usize, name_w: usize) -> ListIte
         Span::raw(" "),
         Span::styled(fit(&r.branch, 14), hue(PLAIN, ACCENT)),
         Span::raw(" "),
+        ci_span(ci, tick),
     ];
     if r.ahead > 0 {
         spans.push(Span::styled(format!("↑{} ", r.ahead), hue(PLAIN, GOOD)));
@@ -268,6 +281,22 @@ fn repo_row(r: &Repo, busy: Option<&str>, tick: usize, name_w: usize) -> ListIte
     ListItem::new(Line::from(spans))
 }
 
+/// The two-column CI slot of a repository row: ✓ passing, ✗ failing, a spinner while running, ○ inconclusive.
+fn ci_span(ci: Option<Ci>, tick: usize) -> Span<'static> {
+    match ci {
+        Some(Ci::Passing) => Span::styled("✓ ", hue(PLAIN, GOOD)),
+        Some(Ci::Failing) => Span::styled("✗ ", hue(BOLD, BAD)),
+        Some(Ci::Running) => Span::styled(format!("{} ", SPINNER[tick % SPINNER.len()]), hue(PLAIN, PINK)),
+        Some(Ci::Other) => Span::styled("○ ", DIM),
+        None => Span::raw("  "),
+    }
+}
+
+/// CI state of `r` when it was loaded for the branch that is checked out now.
+fn ci_of(app: &App, r: &Repo) -> Option<Ci> {
+    app.ci.get(&r.path).filter(|(branch, _)| *branch == r.branch).map(|(_, state)| *state)
+}
+
 fn draw_repos(f: &mut Frame, app: &mut App, area: Rect) {
     let hidden = if app.show_hidden { " · +ignored" } else { "" };
     let title = format!(" Repositories · {} ({}) · by {}{hidden} ", app.filter.name(), app.visible.len(), app.sort.name());
@@ -280,13 +309,13 @@ fn draw_repos(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     // Give the name column the spare width, between 12 and 28 characters.
-    let name_w = (area.width as usize).saturating_sub(52).clamp(12, 28);
+    let name_w = (area.width as usize).saturating_sub(54).clamp(12, 28);
     let items: Vec<ListItem> = app
         .visible
         .iter()
         .map(|&i| {
             let r = &app.repos[i];
-            repo_row(r, app.busy.get(&r.path).copied(), app.tick, name_w)
+            repo_row(r, app.busy.get(&r.path).copied(), ci_of(app, r), app.tick, name_w)
         })
         .collect();
     let selection = if app.focus == Focus::Repos { INVERSE } else { INVERSE_DIM };
@@ -342,6 +371,7 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
     let [info_area, files_area] = Layout::vertical([Constraint::Length(9), Constraint::Min(3)]).spacing(GAP_Y).areas(area);
 
     let label = |s: &'static str| Span::styled(format!("{s:<9}"), DIM);
+    let ci = ci_of(app, &r);
     let mut lines = vec![
         Line::from(vec![label("path"), Span::styled(r.path.display().to_string(), ITALIC)]),
         Line::from(vec![
@@ -365,6 +395,9 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
             count_span(r.ahead as usize, "↑", " ahead", GOOD),
             Span::raw("  "),
             count_span(r.behind as usize, "↓", " behind", BAD),
+            Span::raw(if ci.is_some() { "  ci " } else { "" }),
+            ci.map_or_else(|| Span::raw(""), |c| Span::styled(format!("{} ", c.label()), DIM)),
+            ci_span(ci, app.tick),
         ]),
         Line::from(vec![
             label("changes"),
@@ -952,11 +985,12 @@ fn draw_help(f: &mut Frame) {
         ("i y B S", "GitHub: issues / pull requests / repo in browser / find & clone"),
         ("e / t / o", "yazi on the file or repository / shell / file manager"),
         ("* / x / H", "pin / ignore the repository / show ignored ones"),
-        ("r / R", "reload selected repository / rescan all roots"),
+        ("r / R / w", "reload selected repository / rescan all roots / refresh CI states"),
         (": / Ctrl+P", "command palette: type to find any action, Enter runs it"),
         ("h l C", "hide the key bar / hide the log panel / toggle colors"),
         ("? / q", "this help (any key closes it) / quit"),
         ("↑n ↓n ★ ⊘", "ahead · behind · pinned · ignored"),
+        ("✓ ✗ ⠋ ○", "CI: passing · failing · running · inconclusive"),
         ("+ ~ ? ! $", "staged · modified · untracked · conflicts · stashes"),
     ];
     let lines: Vec<Line> = rows

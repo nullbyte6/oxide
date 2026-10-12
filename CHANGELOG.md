@@ -34,6 +34,9 @@ All notable changes to Oxide are recorded here, newest version first.
 - Add `l` to hide and show the log panel (`logs = off` in the config starts it hidden); while hidden, new log messages appear briefly in the bottom row.
 - Add bulk pull (`L`) and bulk push (`U`, asks for confirmation) for the repositories in view.
 - Add hunk staging to the diff viewer: `s` stages the hunk at the top of the screen (`git apply --cached`) or, in the staged version, unstages it; the current hunk is marked `▸` and counted in the title, and the viewer reloads and follows the file to its other version when one side runs out of hunks.
+- Add file watching through inotify (`src/watch.rs`, no new dependency): every repository's `.git` and the selected repository's working tree are watched, and a repository reloads shortly after the last change made outside Oxide. Status is read with `--no-optional-locks` so reloading never triggers the watcher itself.
+- Add `autofetch` config option (`30s`, `10m`, `1h`; off by default) that fetches every repository on a timer, logging only the first failure of a round, with `⟳` and the interval in the header.
+- Add CI status on repository rows (`✓` passing, `✗` failing, spinner running, `○` inconclusive) and in the details pane, loaded through `gh run list` after the scan, after auto-fetch and on `w`; `ci = off` turns the automatic refresh off.
 
 ### Fixed
 - Fix the key bar losing its last keys on narrow terminals: hints are now dropped from the middle by importance, always keeping `h`, `?` and `q`.

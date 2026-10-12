@@ -4,7 +4,11 @@
 use std::{
     collections::VecDeque,
     path::PathBuf,
-    sync::{Arc, Mutex, mpsc::Sender},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc::Sender,
+    },
     thread,
     time::Instant,
 };
@@ -40,6 +44,14 @@ pub enum Msg {
     GitHub { id: u64, result: Result<Vec<github::Item>, String> },
     /// The text of an issue or pull request (or the error) requested with the given id.
     Text { id: u64, result: Result<String, String> },
+    /// Something changed on disk in the repository (reported by the file watcher).
+    Changed(PathBuf),
+    /// The CI state of a branch; None when it has no runs.
+    Ci { path: PathBuf, branch: String, state: Option<github::Ci> },
+    /// `gh` cannot give CI states at all (not installed or not logged in); the message says why.
+    CiFailed(String),
+    /// The CI batch finished.
+    CiDone,
     /// An operation finished.
     Op { path: PathBuf, label: &'static str, result: Result<String, String> },
 }
@@ -92,6 +104,34 @@ pub fn spawn_ops(jobs: Vec<(PathBuf, Op)>, cfg: Arc<Config>, tx: Sender<Msg>) {
                 let _ = tx.send(Msg::Repo(repo::load(&path, &cfg)));
             }
         });
+    });
+}
+
+/// Loads the CI state of each `(repository, GitHub slug, branch)` in the background.
+pub fn spawn_ci(items: Vec<(PathBuf, String, String)>, tx: Sender<Msg>) {
+    thread::spawn(move || {
+        let stop = AtomicBool::new(false);
+        pool(items, |(path, slug, branch)| {
+            if stop.load(Ordering::Relaxed) {
+                return;
+            }
+            match github::ci_status(&slug, &branch) {
+                Ok(state) => {
+                    let _ = tx.send(Msg::Ci { path, branch, state });
+                }
+                Err(e) if github::is_fatal(&e) => {
+                    // Only the first thread to see the failure reports it.
+                    if !stop.swap(true, Ordering::Relaxed) {
+                        let _ = tx.send(Msg::CiFailed(e));
+                    }
+                }
+                // Other errors (no access, Actions disabled) only mean this repository has no CI to show.
+                Err(_) => {
+                    let _ = tx.send(Msg::Ci { path, branch, state: None });
+                }
+            }
+        });
+        let _ = tx.send(Msg::CiDone);
     });
 }
 

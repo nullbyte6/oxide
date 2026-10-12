@@ -2,7 +2,8 @@
 //!
 //! The optional config file (`$XDG_CONFIG_HOME/oxide/config`, falling back to
 //! `~/.config/oxide/config`) is a list of `key = value` lines; `#` starts a comment.
-//! Supported keys: `root` (repeatable), `owner` (repeatable), `depth`, `color`, `hints` and `logs` (`on` / `off`), `clone_dir`, and the repeatable `pin` and
+//! Supported keys: `root` (repeatable), `owner` (repeatable), `depth`, `color`, `hints`, `logs` and `ci` (`on` / `off`), `autofetch` (`off`, or an
+//! interval such as `10m`), `clone_dir`, and the repeatable `pin` and
 //! `ignore` (a repository directory name, or a path when the value contains `/` or starts with `~`).
 
 use std::{
@@ -28,6 +29,10 @@ pub struct Config {
     pub hints: bool,
     /// Whether the log panel starts visible (`logs = on|off`); `l` toggles it.
     pub logs: bool,
+    /// Seconds between automatic fetches of every repository (`autofetch = 10m`); 0 turns it off.
+    pub autofetch: u64,
+    /// Whether the CI status of GitHub repositories is loaded in the background (`ci = on|off`); `w` always refreshes it.
+    pub ci: bool,
     /// Folder that GitHub repositories are cloned into by default (`clone_dir`); the home directory otherwise.
     pub clone_dir: PathBuf,
     /// Repositories always listed first (directory names or paths from `pin` entries).
@@ -114,6 +119,22 @@ fn unescape_mount(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// Seconds in an interval such as `30s`, `10m` or `1h`; a bare number counts minutes and `off` means 0.
+fn parse_interval(val: &str) -> Option<u64> {
+    let val = val.trim().to_lowercase();
+    if matches!(val.as_str(), "off" | "false" | "no") {
+        return Some(0);
+    }
+    let digits = val.trim_end_matches(|c: char| c.is_ascii_alphabetic());
+    let n: u64 = digits.parse().ok()?;
+    match &val[digits.len()..] {
+        "s" => Some(n),
+        "" | "m" => Some(n * 60),
+        "h" => Some(n * 3600),
+        _ => None,
+    }
+}
+
 impl Config {
     /// Builds the configuration; `cli_roots` (from the command line) replace any `root` entries.
     pub fn load(cli_roots: Vec<PathBuf>) -> Config {
@@ -124,6 +145,8 @@ impl Config {
         let mut hints = true;
         let mut logs = true;
         let mut clone_dir = home();
+        let mut autofetch = 0;
+        let mut ci = true;
         let mut color = env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
 
         if let Ok(text) = fs::read_to_string(config_file()) {
@@ -146,6 +169,12 @@ impl Config {
                         _ => {}
                     },
                     "clone_dir" => clone_dir = expand(val),
+                    "autofetch" => autofetch = parse_interval(val).unwrap_or(autofetch),
+                    "ci" => match val.to_lowercase().as_str() {
+                        "on" | "true" | "yes" | "1" => ci = true,
+                        "off" | "false" | "no" | "0" => ci = false,
+                        _ => {}
+                    },
                     "logs" => match val.to_lowercase().as_str() {
                         "on" | "true" | "yes" | "1" => logs = true,
                         "off" | "false" | "no" | "0" => logs = false,
@@ -175,6 +204,6 @@ impl Config {
         owners.sort();
         owners.dedup();
 
-        Config { roots, owners, depth, color, hints, logs, clone_dir, pins, ignores, cross_devices: explicit }
+        Config { roots, owners, depth, color, hints, logs, autofetch, ci, clone_dir, pins, ignores, cross_devices: explicit }
     }
 }

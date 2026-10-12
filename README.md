@@ -27,6 +27,8 @@ screen, and lets you stage, commit, push, pull, fetch and merge without leaving 
 - **`git init` anywhere**: initialise a repository in any folder, existing or new, and see it in the list right away.
 - **GitHub** (needs the [`gh`](https://cli.github.com) CLI, logged in): browse a repository's issues and pull requests, read them, diff and check out pull requests, find repositories (yours or anyone's) and clone them, and open things in your browser.
 - **Jump out**: open the selected file or repository in yazi, a shell or the file manager.
+- **Always current**: Oxide watches every repository's `.git` and the selected repository's working tree (Linux inotify, no extra dependency), so commits, checkouts and edits made elsewhere show up on their own; an optional timer fetches every repository.
+- **CI at a glance**: the latest GitHub Actions run of each repository's branch as `✓` / `✗` / spinner on the row (needs `gh`).
 - **Non-blocking**: scans and git commands run on background threads; the UI never freezes.
 - **Search**: filter the list live by name, branch or path.
 - **Logs**: an in-app log panel plus a persistent log file.
@@ -100,6 +102,7 @@ oxide [OPTIONS] [PATH...]
 | `o` | Open the repository folder in the file manager (`xdg-open`) |
 | `m` | Merge a branch into the current one (empty input merges the upstream) |
 | `r` / `R` | Reload the selected repository / rescan all roots |
+| `w` | Refresh the CI status of the repositories in view (see below) |
 | `:` / `Ctrl+P` | Command palette: starts empty, type a few letters of any action (GitHub ones included: `clone`, `issues`, `browser` ...) (fuzzy matched), `↑` `↓` pick, `Enter` runs it, `Esc` clears the query and a second `Esc` closes it |
 | `l` | Hide / show the log panel. While it is hidden, each new log message takes the bottom row for a few seconds so results and errors are not missed |
 | `h` | Hide / show the key bar at the bottom (the row goes back to the panels; prompts still use it) |
@@ -146,6 +149,25 @@ push, `private` / `fork` tags and the description, and repositories you already 
 
 The clone uses the protocol configured in `gh` (ssh or https). Like `git init`, a clone outside the scan
 roots disappears on the next full rescan (`R`); `clone_dir` is the best place to also list as a `root`.
+
+### Live updates and CI
+
+**File watching.** Oxide watches the `.git` directory of every repository (index, HEAD, fetch and branch
+refs) and, recursively, the working tree of the *selected* repository, using Linux inotify directly. A
+change made by an editor or another terminal reloads the affected repository about 0.4 s after the last
+write; operations started from Oxide reload it anyway. Only one working tree is watched at a time to stay
+below the kernel's watch limit (`fs.inotify.max_user_watches`); `node_modules`, `target`, `venv` and other
+cache folders are skipped. If the watches cannot be set up the log says so and `r` still reloads by hand.
+
+**Auto-fetch.** With `autofetch = 10m` in the config every listed repository that has a remote is fetched
+(`--all --prune`) on that interval, silently: only the first failure of a round is logged. The header shows `⟳ 10m`
+while it is on. It is off by default.
+
+**CI status.** After the scan, after every auto-fetch round and on `w`, Oxide asks GitHub (through `gh run
+list`) for the newest workflow run of each branch in view that lives on github.com (at most 100 repositories
+per round). The row shows `✓` passing, `✗` failing, a spinner while queued or running and `○` for cancelled or
+skipped runs, and the details pane names the state. If `gh` is missing or not logged in, the log says so once
+and automatic refreshes stop until you press `w`; `ci = off` in the config disables the automatic ones.
 
 ### Commit log
 
@@ -271,6 +293,12 @@ hints = on
 # start with the log panel visible (on) or hidden (off); the l key toggles it
 logs = on
 
+# fetch every repository on this interval (30s, 10m, 1h; a bare number is minutes; off by default)
+autofetch = 10m
+
+# load the CI status of GitHub repositories in the background (on or off; w always refreshes it)
+ci = on
+
 # folder that GitHub repositories are cloned into by default (home directory when unset)
 clone_dir = ~/dev
 
@@ -332,6 +360,7 @@ run in batch mode unless you set `core.sshCommand`, `GIT_SSH_COMMAND` or `GIT_SS
 | `src/git.rs` | `git` CLI wrapper: status parsing, operations and diffs |
 | `src/diff.rs` | Parses `git diff` output into rows for the diff viewer |
 | `src/syntax.rs` | Dependency-free syntax highlighter used by the diff viewer |
+| `src/watch.rs` | inotify file watching of `.git` directories and the selected working tree |
 | `src/repo.rs` | Repository model, discovery, owned/cloned classification |
 | `src/worker.rs` | Background scan and operation threads |
 | `src/config.rs` | Config file, roots and owner names |

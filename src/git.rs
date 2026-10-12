@@ -184,8 +184,9 @@ pub fn last_commit(repo: &Path) -> (String, i64) {
     }
 }
 
+/// `--no-optional-locks` keeps status from refreshing (rewriting) the index, which the file watcher would report as a change again.
 pub fn status(repo: &Path) -> Result<Status, String> {
-    let out = run(repo, &["status", "--porcelain=v2", "--branch", "--show-stash", "-z"])?;
+    let out = run(repo, &["--no-optional-locks", "status", "--porcelain=v2", "--branch", "--show-stash", "-z"])?;
     let mut st = Status { branch: String::new(), upstream: None, ahead: 0, behind: 0, stashes: 0, files: Vec::new() };
 
     // With -z every record is NUL-terminated and paths are not quoted.

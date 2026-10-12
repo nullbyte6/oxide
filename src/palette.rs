@@ -52,6 +52,7 @@ pub const ENTRIES: &[Entry] = &[
     e("Search repositories", "/", '/'),
     e("Reload this repository", "r", 'r'),
     e("Rescan all roots", "R", 'R'),
+    e("Refresh the CI status of repositories in view", "w", 'w'),
     e("Toggle colors", "C", 'C'),
     e("Show or hide the key bar", "h", 'h'),
     e("Show or hide the log panel", "l", 'l'),

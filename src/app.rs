@@ -9,6 +9,7 @@ use std::{
         Arc,
         mpsc::{self, Receiver, Sender},
     },
+    time::{Duration, Instant},
 };
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -18,16 +19,26 @@ use crate::{
     config::{self, Config},
     diff::{self, Diff},
     git::{Branch, Commit, DiffKind, Op},
-    github::{self, Item, Kind, RepoItem, State},
+    github::{self, Ci, Item, Kind, RepoItem, State},
     logger::{self, Level, Logger},
     marks::{Mark, Marks},
     palette,
     repo::{Health, Owner, Repo},
+    watch::Watcher,
     worker::{self, Msg},
 };
 
 /// How many event-loop iterations (about 100 ms each) a message stays up while the log panel is hidden.
 const TOAST_TICKS: usize = 40;
+
+/// Quiet time after the last file event before a repository is reloaded, so a burst of writes reloads once.
+const RELOAD_DELAY: Duration = Duration::from_millis(400);
+
+/// How long another repository must stay selected before its working tree is watched.
+const TREE_DELAY: Duration = Duration::from_millis(300);
+
+/// Most repositories asked for their CI state in one batch.
+const CI_BATCH: usize = 100;
 
 /// Number of log entries kept for the in-app log panel.
 const LOG_LINES: usize = 500;
@@ -376,6 +387,26 @@ pub struct App {
     /// A repository just created with `git init`, selected as soon as it is loaded.
     pending_select: Option<PathBuf>,
     diff_id: u64,
+    /// The file watcher; None where inotify is unavailable.
+    watch: Option<Watcher>,
+    /// Repositories with file events waiting for their quiet time, with the time of the last event.
+    changed: HashMap<PathBuf, Instant>,
+    /// The repository whose working tree is (or is about to be) watched, and since when it has been selected.
+    tree: Option<(PathBuf, Instant)>,
+    /// The repository whose working tree the watcher was last pointed at.
+    tree_done: Option<PathBuf>,
+    /// Repositories being fetched by the timer; their results are only logged when something fails.
+    quiet: HashSet<PathBuf>,
+    /// An automatic fetch already reported a failure in this round.
+    auto_failed: bool,
+    /// When the timer last started an automatic fetch (or when Oxide started).
+    auto_at: Instant,
+    /// Newest CI state per repository, with the branch it belongs to.
+    pub ci: HashMap<PathBuf, (String, Ci)>,
+    /// A CI batch is running.
+    ci_busy: bool,
+    /// Automatic CI refreshes are on (turned off when `gh` is unusable, until `w` is pressed).
+    ci_auto: bool,
     /// A terminal program requested by the user; taken and run by the event loop.
     pub launch: Option<Launch>,
     marks: Marks,
@@ -397,8 +428,9 @@ fn step(cur: Option<usize>, len: usize, delta: isize) -> Option<usize> {
 impl App {
     pub fn new(cfg: Config) -> App {
         let (tx, rx) = mpsc::channel();
-        let (color, hints, logs) = (cfg.color, cfg.hints, cfg.logs);
-        App {
+        let (color, hints, logs, cfg_ci) = (cfg.color, cfg.hints, cfg.logs, cfg.ci);
+        let watch = Watcher::start(tx.clone());
+        let mut app = App {
             marks: Marks::load(&cfg),
             cfg: Arc::new(cfg),
             repos: Vec::new(),
@@ -433,12 +465,26 @@ impl App {
             input_back: Mode::Normal,
             pending_select: None,
             diff_id: 0,
+            watch: watch.as_ref().ok().cloned(),
+            changed: HashMap::new(),
+            tree: None,
+            tree_done: None,
+            quiet: HashSet::new(),
+            auto_failed: false,
+            auto_at: Instant::now(),
+            ci: HashMap::new(),
+            ci_busy: false,
+            ci_auto: cfg_ci,
             launch: None,
             logger: Logger::open(),
             scan_paths: HashSet::new(),
             tx,
             rx,
+        };
+        if let Err(e) = watch {
+            app.log(Level::Warn, format!("file watching is off: {e}"));
         }
+        app
     }
 
     pub fn log(&mut self, level: Level, text: impl Into<String>) {
@@ -520,7 +566,13 @@ impl App {
                     self.follow_diff(&repo);
                     match self.repos.iter_mut().find(|r| r.path == path) {
                         Some(slot) => *slot = repo,
-                        None => self.repos.push(repo),
+                        None => {
+                            // A repository that appeared after the scan (clone, init) is watched from now on.
+                            if self.scan.is_none() {
+                                self.watch_repo(&path);
+                            }
+                            self.repos.push(repo);
+                        }
                     }
                     self.rebuild();
                     if self.pending_select.as_ref() == Some(&path) {
@@ -539,7 +591,31 @@ impl App {
                     self.repos.retain(|r| keep.contains(&r.path));
                     self.rebuild();
                     self.log(Level::Ok, format!("scan finished: {} repositories in {ms} ms", self.repos.len()));
+                    self.watch_repos();
+                    if self.ci_auto {
+                        self.start_ci(false);
+                    }
                 }
+                Msg::Changed(path) => {
+                    // An operation of Oxide's own reloads the repository when it ends.
+                    if !self.busy.contains_key(&path) {
+                        self.changed.insert(path, Instant::now());
+                    }
+                }
+                Msg::Ci { path, branch, state } => match state {
+                    Some(state) => {
+                        self.ci.insert(path, (branch, state));
+                    }
+                    None => {
+                        self.ci.remove(&path);
+                    }
+                },
+                Msg::CiFailed(e) => {
+                    self.ci_auto = false;
+                    let first = e.lines().next().unwrap_or("").to_string();
+                    self.log(Level::Warn, format!("CI status unavailable: {first}"));
+                }
+                Msg::CiDone => self.ci_busy = false,
                 Msg::History { id, result } => {
                     if let Some(v) = self.history.as_mut().filter(|v| v.id == id) {
                         match result {
@@ -624,6 +700,17 @@ impl App {
                         self.reload_diff(&path);
                     }
                     let name = dir_name(&path);
+                    // A fetch started by the timer only speaks up when it fails, and only once per round.
+                    if self.quiet.remove(&path) {
+                        if let Err(err) = result
+                            && !self.auto_failed
+                        {
+                            self.auto_failed = true;
+                            let first = err.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+                            self.log(Level::Warn, format!("auto-fetch: {name} failed ({first}); other failures this round are not logged"));
+                        }
+                        continue;
+                    }
                     match result {
                         Ok(out) => {
                             self.log(Level::Ok, format!("{name}: {label} ok"));
@@ -641,6 +728,108 @@ impl App {
                 }
             }
         }
+    }
+
+    // ---- file watching, automatic fetch and CI ----
+
+    /// Starts watching the git directory of one repository, logging the failure (once) when the limit is hit.
+    fn watch_repo(&mut self, path: &Path) {
+        let Some(w) = self.watch.clone() else { return };
+        if let Err(e) = w.watch_git(path) {
+            self.log(Level::Warn, format!("cannot watch {}: {e} (raise fs.inotify.max_user_watches)", path.display()));
+            self.watch = None; // every further repository would fail the same way
+        }
+    }
+
+    fn watch_repos(&mut self) {
+        let paths: Vec<PathBuf> = self.repos.iter().map(|r| r.path.clone()).collect();
+        for path in paths {
+            self.watch_repo(&path);
+        }
+    }
+
+    /// Housekeeping run once per event-loop iteration: reloads repositories whose files changed,
+    /// moves the working-tree watch to the selected repository and starts the timed fetch.
+    pub fn background(&mut self) {
+        let due: Vec<PathBuf> = self.changed.iter().filter(|(_, t)| t.elapsed() >= RELOAD_DELAY).map(|(p, _)| p.clone()).collect();
+        for path in due {
+            self.changed.remove(&path);
+            if !self.busy.contains_key(&path) {
+                self.reload(path);
+            }
+        }
+
+        // Move the working-tree watch to the selected repository, but only once the selection has rested
+        // for a moment, so scrolling through the list does not walk every tree on the way.
+        if let (Some(w), Some(sel)) = (self.watch.clone(), self.selected().map(|r| r.path.clone()))
+            && self.tree_done.as_ref() != Some(&sel)
+        {
+            let since = match &self.tree {
+                Some((p, t)) if *p == sel => *t,
+                _ => {
+                    self.tree = Some((sel.clone(), Instant::now()));
+                    Instant::now()
+                }
+            };
+            if since.elapsed() >= TREE_DELAY {
+                self.tree_done = Some(sel.clone());
+                // A tree that cannot be watched (limit reached) just falls back to manual reloads with `r`.
+                std::thread::spawn(move || {
+                    let _ = w.watch_tree(&sel);
+                });
+            }
+        }
+
+        let every = self.cfg.autofetch;
+        if every > 0 && self.scan.is_none() && self.auto_at.elapsed() >= Duration::from_secs(every) {
+            self.auto_at = Instant::now();
+            self.auto_fetch();
+        }
+    }
+
+    /// Fetches every listed repository that has a remote, without logging successes.
+    fn auto_fetch(&mut self) {
+        let jobs: Vec<(PathBuf, Op)> =
+            self.listed().filter(|r| r.remote.is_some() && r.error.is_none()).filter(|r| !self.busy.contains_key(&r.path)).map(|r| (r.path.clone(), Op::Fetch)).collect();
+        self.auto_failed = false;
+        self.quiet.extend(jobs.iter().map(|(p, _)| p.clone()));
+        self.run_ops(jobs);
+        if self.ci_auto {
+            self.start_ci(false);
+        }
+    }
+
+    /// Asks GitHub for the CI state of the repositories in view that live on github.com.
+    /// `manual` also reports when there is nothing to ask and turns automatic refreshes back on.
+    fn start_ci(&mut self, manual: bool) {
+        if manual {
+            self.ci_auto = true;
+        }
+        if self.ci_busy {
+            if manual {
+                self.log(Level::Info, "CI states are already loading");
+            }
+            return;
+        }
+        let items: Vec<(PathBuf, String, String)> = self
+            .visible
+            .iter()
+            .map(|&i| &self.repos[i])
+            .filter(|r| r.error.is_none() && !r.ignored)
+            .filter_map(|r| Some((r.path.clone(), r.slug.clone()?, r.branch.clone())))
+            .take(CI_BATCH)
+            .collect();
+        if items.is_empty() {
+            if manual {
+                self.log(Level::Info, "no repository in this view has a github.com remote");
+            }
+            return;
+        }
+        if manual {
+            self.log(Level::Info, format!("loading CI status of {} repositories", items.len()));
+        }
+        self.ci_busy = true;
+        worker::spawn_ci(items, self.tx.clone());
     }
 
     // ---- derived state ----
@@ -769,6 +958,7 @@ impl App {
             KeyCode::Char('o') => self.open_files(),
             KeyCode::Char('/') => self.open_input(InputKind::Search),
             KeyCode::Char('R') => self.start_scan(),
+            KeyCode::Char('w') => self.start_ci(true),
             KeyCode::Char('r') => self.refresh_selected(),
             KeyCode::Char('F') => self.op_selected(Op::Fetch),
             KeyCode::Char('A') => self.fetch_visible(),

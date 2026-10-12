@@ -12,6 +12,7 @@ mod palette;
 mod repo;
 mod syntax;
 mod ui;
+mod watch;
 mod worker;
 
 use std::{
@@ -44,7 +45,7 @@ OPTIONS:
     -V, --version  Show the version
 
 FILES:
-    ~/.config/oxide/config       'root', 'owner', 'depth', 'pin' and 'ignore' entries (key = value)
+    ~/.config/oxide/config       'root', 'owner', 'depth', 'autofetch', 'ci', 'pin' and 'ignore' entries (key = value)
     ~/.local/state/oxide/oxide.log
     ~/.local/state/oxide/marks   repositories pinned or ignored with the * and x keys
 ";
@@ -109,6 +110,7 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
             app.launch_done(launch.repo(), result);
         }
         app.drain();
+        app.background();
         app.tick = app.tick.wrapping_add(1);
     }
     Ok(())

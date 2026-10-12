@@ -13,7 +13,7 @@ use crate::{
 };
 
 /// Directories never searched for repositories (hidden directories are skipped as well).
-const SKIP: &[&str] = &["node_modules", "target", "__pycache__", "venv", "snap", "$RECYCLE.BIN", "System Volume Information"];
+pub const SKIP: &[&str] = &["node_modules", "target", "__pycache__", "venv", "snap", "$RECYCLE.BIN", "System Volume Information"];
 
 /// System directories skipped only directly under `/` (a user's own `dev` or `usr` folder is still scanned).
 const ROOT_SKIP: &[&str] = &["proc", "sys", "dev", "run", "boot", "usr", "lost+found"];
