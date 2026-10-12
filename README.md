@@ -110,7 +110,7 @@ once with `gh auth login`. A repository needs a `github.com` remote (ssh, https 
 report "no github.com remote" in the log.
 
 `i` lists the repository's issues and `y` its pull requests (the newest 100), full screen. Issue rows
-show the number, title, comment count, labels, author and age of the last update; pull request rows show
+show the number, title, labels, author and age of the last update; pull request rows show
 the source branch instead of labels and mark drafts `◌`, approved `✓` and changes requested `±`.
 
 | Key | Action |
@@ -118,6 +118,9 @@ the source branch instead of labels and mark drafts `◌`, approved `✓` and ch
 | `↑` `↓` / `j` `k`, `g` / `G`, `Space` / `b` | Move |
 | `Tab` | Switch between issues and pull requests |
 | `s` | State filter: open, closed, (merged for pull requests), all |
+| `Enter` | Read the item: description and comments as text (`o` opens it in the browser, `Esc` goes back) |
+| `d` | Pull requests: the diff in the diff viewer, one section per file |
+| `c` | Pull requests: check the branch out in the local repository (asks `y` to confirm) |
 | `o` | Open the highlighted item in the browser |
 | `B` | Open the repository in the browser |
 | `r` | Reload |

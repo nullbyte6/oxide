@@ -199,6 +199,7 @@ impl BranchView {
 
 /// The issues or pull requests of one repository on GitHub.
 pub struct GhView {
+    pub repo: PathBuf,
     pub name: String,
     pub slug: String,
     pub kind: Kind,
@@ -207,6 +208,20 @@ pub struct GhView {
     pub items: Option<Vec<Item>>,
     pub error: Option<String>,
     pub list: ListState,
+    id: u64,
+}
+
+/// An issue or pull request as scrollable text, opened from the GitHub list.
+pub struct TextView {
+    pub title: String,
+    /// None while loading.
+    pub lines: Option<Vec<String>>,
+    pub error: Option<String>,
+    pub scroll: usize,
+    /// Rows that fit on screen; set by the renderer.
+    pub height: usize,
+    /// Arguments for `gh` that open the same item in the browser.
+    browse: Vec<String>,
     id: u64,
 }
 
@@ -259,6 +274,8 @@ pub enum Mode {
     Branches,
     /// The GitHub issue or pull request list (`App::gh`) is open.
     GitHub,
+    /// An issue or pull request opened as text (`App::text`).
+    Text,
     Help,
 }
 
@@ -303,6 +320,7 @@ pub struct App {
     pub history: Option<HistoryView>,
     pub branches: Option<BranchView>,
     pub gh: Option<GhView>,
+    pub text: Option<TextView>,
     /// Mode to return to when the input line closes (the dashboard, or the branch list).
     input_back: Mode,
     /// A repository just created with `git init`, selected as soon as it is loaded.
@@ -357,6 +375,7 @@ impl App {
             history: None,
             branches: None,
             gh: None,
+            text: None,
             input_back: Mode::Normal,
             pending_select: None,
             diff_id: 0,
@@ -482,6 +501,15 @@ impl App {
                         }
                     }
                 }
+                Msg::Text { id, result } => {
+                    if let Some(v) = self.text.as_mut().filter(|v| v.id == id) {
+                        match result {
+                            // The terminal can show neither tabs nor control characters as they are.
+                            Ok(text) => v.lines = Some(text.lines().map(|l| l.replace('\t', "    ").chars().filter(|c| !c.is_control()).collect()).collect()),
+                            Err(e) => v.error = Some(e),
+                        }
+                    }
+                }
                 Msg::Branches { id, result } => {
                     if let Some(v) = self.branches.as_mut().filter(|v| v.id == id) {
                         match result {
@@ -587,6 +615,7 @@ impl App {
             Mode::History => self.on_history_key(key),
             Mode::Branches => self.on_branch_key(key),
             Mode::GitHub => self.on_gh_key(key),
+            Mode::Text => self.on_text_key(key),
             Mode::Normal => self.on_normal_key(key),
         }
     }
@@ -840,8 +869,8 @@ impl App {
     }
 
     fn open_gh(&mut self, kind: Kind) {
-        let Some((_, name, slug)) = self.github_target() else { return };
-        self.gh = Some(GhView { name, slug, kind, state: State::Open, items: None, error: None, list: ListState::default(), id: 0 });
+        let Some((repo, name, slug)) = self.github_target() else { return };
+        self.gh = Some(GhView { repo, name, slug, kind, state: State::Open, items: None, error: None, list: ListState::default(), id: 0 });
         self.mode = Mode::GitHub;
         self.load_gh();
     }
@@ -890,6 +919,29 @@ impl App {
                 }
                 return;
             }
+            KeyCode::Enter => {
+                if let Some(i) = v.selected() {
+                    let (number, title) = (i.number, i.title.clone());
+                    self.open_text(number, title);
+                }
+                return;
+            }
+            KeyCode::Char('d') if v.kind == Kind::Pulls => {
+                if let Some(i) = v.selected() {
+                    let target = format!("{}#{}", v.slug, i.number);
+                    let repo = v.repo.clone();
+                    self.start_diff(repo, target, DiffKind::Pull, false, Mode::GitHub);
+                }
+                return;
+            }
+            KeyCode::Char('c') if v.kind == Kind::Pulls => {
+                if let Some(i) = v.selected() {
+                    let (repo, n) = (v.repo.clone(), i.number);
+                    let prompt = format!("check out PR #{n} ({}) in {}?", i.branch, v.name);
+                    self.ask(prompt, vec![(repo, Op::CheckoutPr(n))]);
+                }
+                return;
+            }
             KeyCode::Char('B') => {
                 let args = github::browse_args(&v.slug, v.kind, None);
                 self.spawn_detached("gh", &args, "repository opened in the browser");
@@ -904,6 +956,47 @@ impl App {
             _ => return,
         };
         v.list.select(step(v.list.selected(), len, delta));
+    }
+
+    /// Opens issue or pull request `number` of the current GitHub list as text.
+    fn open_text(&mut self, number: u64, title: String) {
+        let Some(v) = self.gh.as_ref() else { return };
+        let (slug, kind) = (v.slug.clone(), v.kind);
+        let sigil = if kind == Kind::Pulls { "PR" } else { "Issue" };
+        self.diff_id += 1;
+        let id = self.diff_id;
+        let browse = github::browse_args(&slug, kind, Some(number));
+        self.text = Some(TextView { title: format!("{sigil} #{number} · {title}"), lines: None, error: None, scroll: 0, height: 20, browse, id });
+        self.mode = Mode::Text;
+        // gh formats for a terminal of the given width; leave room for the panel border and padding.
+        let width = crossterm::terminal::size().map_or(100, |(w, _)| w.saturating_sub(6).clamp(40, 140));
+        worker::spawn_msg(self.tx.clone(), move || Msg::Text { id, result: github::view(&slug, kind, number, width) });
+    }
+
+    fn on_text_key(&mut self, key: KeyEvent) {
+        let Some(v) = self.text.as_mut() else {
+            self.mode = Mode::GitHub;
+            return;
+        };
+        let max = v.lines.as_ref().map_or(0, |l| l.len().saturating_sub(v.height));
+        let page = v.height.saturating_sub(1).max(1);
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.text = None;
+                self.mode = Mode::GitHub;
+            }
+            KeyCode::Down | KeyCode::Char('j') => v.scroll = (v.scroll + 1).min(max),
+            KeyCode::Up | KeyCode::Char('k') => v.scroll = v.scroll.saturating_sub(1),
+            KeyCode::PageDown | KeyCode::Char(' ') => v.scroll = (v.scroll + page).min(max),
+            KeyCode::PageUp | KeyCode::Char('b') => v.scroll = v.scroll.saturating_sub(page),
+            KeyCode::Home | KeyCode::Char('g') => v.scroll = 0,
+            KeyCode::End | KeyCode::Char('G') => v.scroll = max,
+            KeyCode::Char('o') => {
+                let args = v.browse.clone();
+                self.spawn_detached("gh", &args, "opened in the browser");
+            }
+            _ => {}
+        }
     }
 
     /// Opens the selected repository's GitHub page in the browser.

@@ -82,7 +82,6 @@ pub struct Item {
     pub labels: String,
     /// Time since the last update, e.g. `3d`.
     pub age: String,
-    pub comments: u64,
     pub draft: bool,
     /// Source branch (pull requests).
     pub branch: String,
@@ -90,11 +89,15 @@ pub struct Item {
     pub review: String,
 }
 
-/// Runs `gh` and returns stdout, or its error message. Prompts are disabled and colors are off,
-/// so the output is plain text and a prompt can never take over the terminal.
-pub fn gh(cwd: Option<&Path>, args: &[&str]) -> Result<String, String> {
+/// Runs `gh`; returns `(stdout, stderr)`, or its error message when it fails. Prompts are disabled
+/// and colors are off, so the output is plain text and a prompt can never take over the terminal.
+/// `tty_width` makes gh format its output as for a terminal of that width (needed for `view`).
+fn exec(cwd: Option<&Path>, args: &[&str], tty_width: Option<u16>) -> Result<(String, String), String> {
     let mut cmd = Command::new("gh");
     cmd.args(args).env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1").stdin(Stdio::null());
+    if let Some(w) = tty_width {
+        cmd.env("GH_FORCE_TTY", w.to_string());
+    }
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
@@ -102,12 +105,22 @@ pub fn gh(cwd: Option<&Path>, args: &[&str]) -> Result<String, String> {
         io::ErrorKind::NotFound => "gh is not installed (https://cli.github.com)".to_string(),
         _ => format!("cannot run gh: {e}"),
     })?;
+    let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).trim().to_string());
     if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+        Ok((stdout, stderr))
     } else {
-        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        Err(if err.is_empty() { "gh failed".to_string() } else { err })
+        Err(if stderr.is_empty() { "gh failed".to_string() } else { stderr })
     }
+}
+
+/// Runs `gh` and returns stdout.
+pub fn gh(cwd: Option<&Path>, args: &[&str]) -> Result<String, String> {
+    exec(cwd, args, None).map(|(out, _)| out)
+}
+
+/// Runs `gh` and returns stdout plus stderr, where it reports what it did (for the log).
+pub fn gh_all(cwd: Option<&Path>, args: &[&str]) -> Result<String, String> {
+    exec(cwd, args, None).map(|(out, err)| format!("{}\n{err}", out.trim()).trim().to_string())
 }
 
 /// `owner/repo` of a github.com remote URL (ssh, https or git protocol), or None for any other host.
@@ -173,15 +186,15 @@ pub fn ago(iso: &str) -> String {
 
 /// The newest 100 issues or pull requests of `slug` in the given state.
 pub fn list(slug: &str, kind: Kind, state: State) -> Result<Vec<Item>, String> {
-    // Every row has the same nine columns, whichever kind it is.
+    // Every row has the same eight columns, whichever kind it is.
     let (fields, jq) = match kind {
         Kind::Issues => (
-            "number,title,author,labels,updatedAt,comments",
-            r#".[]|[.number,.title,(.author.login//""),([.labels[].name]|join(",")),.updatedAt,(.comments|if type=="array" then length else (.totalCount//0) end),false,"",""]|@tsv"#,
+            "number,title,author,labels,updatedAt",
+            r#".[]|[.number,.title,(.author.login//""),([.labels[].name]|join(",")),.updatedAt,false,"",""]|@tsv"#,
         ),
         Kind::Pulls => (
             "number,title,author,isDraft,headRefName,reviewDecision,updatedAt",
-            r#".[]|[.number,.title,(.author.login//""),"",.updatedAt,0,.isDraft,.headRefName,(.reviewDecision//"")]|@tsv"#,
+            r#".[]|[.number,.title,(.author.login//""),"",.updatedAt,.isDraft,.headRefName,(.reviewDecision//"")]|@tsv"#,
         ),
     };
     let out = gh(None, &[kind.command(), "list", "-R", slug, "--state", state.name(), "--limit", "100", "--json", fields, "--jq", jq])?;
@@ -189,14 +202,13 @@ pub fn list(slug: &str, kind: Kind, state: State) -> Result<Vec<Item>, String> {
         .lines()
         .filter_map(|l| {
             let f: Vec<String> = l.split('\t').map(untsv).collect();
-            let [number, title, author, labels, updated, comments, draft, branch, review] = &f[..] else { return None };
+            let [number, title, author, labels, updated, draft, branch, review] = &f[..] else { return None };
             Some(Item {
                 number: number.parse().ok()?,
                 title: title.clone(),
                 author: author.clone(),
                 labels: labels.clone(),
                 age: ago(updated),
-                comments: comments.parse().unwrap_or(0),
                 draft: draft == "true",
                 branch: branch.clone(),
                 review: review.clone(),
@@ -211,4 +223,20 @@ pub fn browse_args(slug: &str, kind: Kind, number: Option<u64>) -> Vec<String> {
         Some(n) => vec![kind.command().into(), "view".into(), n.to_string(), "-R".into(), slug.into(), "--web".into()],
         None => vec!["browse".into(), "-R".into(), slug.into()],
     }
+}
+
+/// An issue or pull request as text: header, description and comments, formatted for `width` columns.
+pub fn view(slug: &str, kind: Kind, number: u64, width: u16) -> Result<String, String> {
+    let n = number.to_string();
+    exec(None, &[kind.command(), "view", &n, "-R", slug, "--comments"], Some(width)).map(|(out, _)| out)
+}
+
+/// The unified diff of a pull request.
+pub fn pr_diff(slug: &str, number: u64) -> Result<String, String> {
+    gh(None, &["pr", "diff", &number.to_string(), "-R", slug, "--color", "never"])
+}
+
+/// Checks out a pull request's branch in the repository at `repo`.
+pub fn checkout(repo: &Path, number: u64) -> Result<String, String> {
+    gh_all(Some(repo), &["pr", "checkout", &number.to_string()])
 }

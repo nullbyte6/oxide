@@ -111,6 +111,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::History => draw_history(f, app),
         Mode::Branches => draw_branches(f, app),
         Mode::GitHub => draw_github(f, app),
+        Mode::Text => draw_text(f, app),
         _ => {}
     }
     if app.mode == Mode::Palette {
@@ -459,7 +460,16 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
     if app.mode == Mode::GitHub {
-        let hints = [("↑↓", "move"), ("Tab", "issues/PRs"), ("s", "state"), ("o", "browser"), ("B", "repo in browser"), ("r", "reload"), ("Esc", "close")];
+        let mut hints = vec![("↑↓", "move"), ("Enter", "read"), ("Tab", "issues/PRs"), ("s", "state"), ("o", "browser")];
+        if app.gh.as_ref().is_some_and(|v| v.kind == Kind::Pulls) {
+            hints.extend([("d", "diff"), ("c", "checkout")]);
+        }
+        hints.extend([("B", "repo in browser"), ("Esc", "close")]);
+        f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
+        return;
+    }
+    if app.mode == Mode::Text {
+        let hints = [("↑↓", "scroll"), ("Space", "page"), ("g G", "top/end"), ("o", "browser"), ("Esc", "back")];
         f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
         return;
     }
@@ -569,6 +579,8 @@ fn draw_diff(f: &mut Frame, app: &mut App) {
     let name = v.repo.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     let title = if v.kind == DiffKind::Commit {
         format!(" Commit · {name} · {} ", v.file)
+    } else if v.kind == DiffKind::Pull {
+        format!(" Pull request · {} ", v.file)
     } else {
         format!(" Diff · {name}/{} · {} ", v.file, v.kind.label())
     };
@@ -684,7 +696,7 @@ fn draw_github(f: &mut Frame, app: &mut App) {
     let pulls = v.kind == Kind::Pulls;
     // Fixed columns: number, branch or labels, author, age; the title takes what is left.
     let side_w = if pulls { 24 } else { 22 };
-    let title_w = (area.width as usize).saturating_sub(4 + 8 + 5 + side_w + 15 + 5).max(12);
+    let title_w = (area.width as usize).saturating_sub(4 + 8 + 2 + side_w + 15 + 5).max(12);
     let rows: Vec<ListItem> = items
         .iter()
         .map(|i| {
@@ -700,15 +712,44 @@ fn draw_github(f: &mut Frame, app: &mut App) {
                 spans.push(Span::styled(mark, mark_style));
             }
             spans.push(Span::styled(fit(&i.title, title_w), PLAIN));
-            let replies = if i.comments > 0 { format!("✉{:<3}", i.comments) } else { " ".repeat(4) };
-            spans.push(Span::styled(replies, DIM));
+            spans.push(Span::raw(" "));
             spans.push(Span::styled(fit(side, side_w), hue(DIM, ACCENT)));
+            spans.push(Span::raw(" "));
             spans.push(Span::styled(fit(&i.author, 14), hue(PLAIN, INFO)));
             spans.push(Span::styled(format!("{:>4}", i.age), DIM));
             ListItem::new(Line::from(spans))
         })
         .collect();
     f.render_stateful_widget(List::new(rows).block(block).highlight_style(INVERSE), area, &mut v.list);
+}
+
+/// An issue or pull request as plain scrollable text.
+fn draw_text(f: &mut Frame, app: &mut App) {
+    let [area, _] = Layout::vertical([Constraint::Min(0), Constraint::Length(footer_height(app))]).areas(f.area());
+    let Some(v) = app.text.as_mut() else { return };
+    f.render_widget(Clear, area);
+    v.height = area.height.saturating_sub(2) as usize;
+    let block = pane(format!(" {} ", v.title), true);
+    let note = |msg: String, f: &mut Frame, block: Block<'static>| {
+        f.render_widget(Paragraph::new(msg).style(DIM.add_modifier(Modifier::ITALIC)).block(block), area);
+    };
+    if let Some(e) = &v.error {
+        return note(format!("gh failed: {}", e.lines().next().unwrap_or("")), f, block);
+    }
+    let Some(all) = &v.lines else { return note("Loading from GitHub…".to_string(), f, block) };
+    v.scroll = v.scroll.min(all.len().saturating_sub(v.height));
+    let last = (v.scroll + v.height).min(all.len());
+    let block = block.title_top(Line::from(Span::styled(format!(" {}-{last}/{} ", (v.scroll + 1).min(last), all.len()), DIM)).right_aligned());
+    // The first line is gh's headline; metadata lines ("Open • user opened ...") follow it.
+    let lines: Vec<Line> = all[v.scroll..last]
+        .iter()
+        .enumerate()
+        .map(|(k, l)| {
+            let style = if v.scroll + k == 0 { hue(BOLD, ACCENT) } else if l.starts_with("--") || l.starts_with("──") { DIM } else { PLAIN };
+            Line::from(Span::styled(l.clone(), style))
+        })
+        .collect();
+    f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 /// The branch list as a popup, with the newest log message below it so the result of an action is visible.

@@ -34,6 +34,8 @@ pub enum Msg {
     Branches { id: u64, result: Result<Vec<git::Branch>, String> },
     /// Issues or pull requests (or the error) requested with the given id.
     GitHub { id: u64, result: Result<Vec<github::Item>, String> },
+    /// The text of an issue or pull request (or the error) requested with the given id.
+    Text { id: u64, result: Result<String, String> },
     /// An operation finished.
     Op { path: PathBuf, label: &'static str, result: Result<String, String> },
 }

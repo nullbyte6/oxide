@@ -67,6 +67,8 @@ pub enum Op {
     NewBranch(String),
     /// Delete a local branch; `true` deletes it even when it is not merged.
     DeleteBranch(String, bool),
+    /// Check out the branch of a GitHub pull request (through `gh`).
+    CheckoutPr(u64),
 }
 
 impl Op {
@@ -87,6 +89,7 @@ impl Op {
             Op::Switch(..) => "switch",
             Op::NewBranch(_) => "new branch",
             Op::DeleteBranch(..) => "delete branch",
+            Op::CheckoutPr(_) => "pr checkout",
         }
     }
 }
@@ -233,6 +236,8 @@ pub enum DiffKind {
     Untracked,
     /// A whole commit; the diff target is its hash.
     Commit,
+    /// A GitHub pull request; the diff target is `owner/repo#number`.
+    Pull,
 }
 
 impl DiffKind {
@@ -242,6 +247,7 @@ impl DiffKind {
             DiffKind::Staged => "staged",
             DiffKind::Untracked => "untracked",
             DiffKind::Commit => "commit",
+            DiffKind::Pull => "pull request",
         }
     }
 }
@@ -252,6 +258,10 @@ pub fn diff(repo: &Path, file: &str, kind: DiffKind) -> Result<String, String> {
     match kind {
         DiffKind::Unstaged => run(repo, &[&base[..], &["--", file]].concat()),
         DiffKind::Staged => run(repo, &[&base[..], &["--cached", "--", file]].concat()),
+        DiffKind::Pull => {
+            let (slug, number) = file.rsplit_once('#').ok_or("bad pull request reference")?;
+            crate::github::pr_diff(slug, number.parse().map_err(|_| "bad pull request number")?)
+        }
         DiffKind::Commit if file.starts_with('-') => Err(format!("invalid commit '{file}'")),
         DiffKind::Commit => {
             let format = "--format=commit %H%nAuthor: %an <%ae>%nDate:   %ad%n%n%w(0,4,4)%B";
@@ -382,6 +392,7 @@ pub fn perform(repo: &Path, op: &Op) -> Result<String, String> {
         Op::Switch(name, true) => run_all(repo, &["switch", "--track", name]),
         Op::Switch(name, false) => run_all(repo, &["switch", name]),
         Op::NewBranch(name) => run_all(repo, &["switch", "-c", name]),
+        Op::CheckoutPr(n) => crate::github::checkout(repo, *n),
         Op::DeleteBranch(name, force) => run_all(repo, &["branch", if *force { "-D" } else { "-d" }, "--", name]),
     }
 }
