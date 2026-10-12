@@ -170,6 +170,7 @@ fn repo_row(r: &Repo, busy: Option<&str>, tick: usize, name_w: usize) -> ListIte
         Owner::Cloned => ("clone", DIM),
     };
     let mut spans = vec![
+        Span::raw("  "), // left breathing room inside the selection bar
         Span::styled(fit(&r.name, name_w), BOLD),
         Span::raw(" "),
         Span::styled(badge, badge_style),
@@ -212,7 +213,7 @@ fn draw_repos(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     // Give the name column the spare width, between 12 and 28 characters.
-    let name_w = (area.width as usize).saturating_sub(46).clamp(12, 28);
+    let name_w = (area.width as usize).saturating_sub(48).clamp(12, 28);
     let items: Vec<ListItem> = app
         .visible
         .iter()

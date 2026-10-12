@@ -9,9 +9,9 @@ screen, and lets you stage, commit, push, pull, fetch and merge without leaving 
 │  All 12  ┊  Owned 7  ┊  Cloned 5                                                     │
 └──────────────────────────────────────────────────────────────────────────────────────┘
 ┏─┤ Repositories · all (12) ├━━━━━━━━━━━━━━━┓ ┌─┤ oxide ├─────────────────────────────┐
-┃ oxide        own   main     ↑1 ~2 ?7      ┃ │ path     /home/you/oxide              │
-┃ ratatui      clone main     ↓3            ┃ │ branch   main  → origin/main          │
-┃ notes        own   main                   ┃ │ owner    owned                        │
+┃   oxide        own   main     ↑1 ~2 ?7      ┃ │ path     /home/you/oxide              │
+┃   ratatui      clone main     ↓3            ┃ │ branch   main  → origin/main          │
+┃   notes        own   main                   ┃ │ owner    owned                        │
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛ └───────────────────────────────────────┘
 ```
 

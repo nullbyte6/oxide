@@ -15,7 +15,7 @@ All notable changes to Oxide are recorded here, newest version first.
 - Add ASCII banner on top of the dashboard, rendered from `src/banner.sh`: its ANSI colors are converted to Ratatui styles and it is hidden on small terminals.
 
 ### Fixed
-- Fix leftover status circles on repository rows from the old colored design; dirty, conflict and error state remains visible through the row counters and labels.
+- Fix leftover status circles on repository rows from the old colored design, leaving two columns of left padding in their place; dirty, conflict and error state remains visible through the row counters and labels.
 - Fix log timestamps to use the local timezone instead of UTC, in the log file (with UTC offset) and in the Log panel title.
 - Fix scan listing broken repositories: a `.git` that is empty or points to a removed gitdir (dangling submodule) is no longer treated as a repository.
 
