@@ -5,7 +5,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Clear, List, ListItem, Paragraph, Tabs},
+    widgets::{Block, Clear, List, ListItem, Padding, Paragraph, Tabs},
 };
 
 use crate::{
@@ -18,9 +18,27 @@ use crate::{
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const ACCENT: Color = Color::Cyan;
 
+/// Banner art shown above the dashboard; edit `src/banner.txt` to change it (empty file = no banner).
+const BANNER: &str = include_str!("banner.txt");
+
+/// Inner side padding of every panel. A terminal cell is about twice as tall as it is wide,
+/// so one column of padding makes the sides look as thick as the one-row top and bottom borders.
+const SIDE_PAD: u16 = 1;
+
 pub fn draw(f: &mut Frame, app: &mut App) {
-    let [header, body, log, footer] =
-        Layout::vertical([Constraint::Length(3), Constraint::Min(8), Constraint::Length(8), Constraint::Length(1)]).areas(f.area());
+    let banner = BANNER.trim_matches('\n');
+    let banner_h = banner.lines().count() as u16;
+    let [banner_area, header, body, log, footer] = Layout::vertical([
+        Constraint::Length(banner_h),
+        Constraint::Length(3),
+        Constraint::Min(8),
+        Constraint::Length(8),
+        Constraint::Length(1),
+    ])
+    .areas(f.area());
+    if banner_h > 0 {
+        f.render_widget(Paragraph::new(banner).style(Style::new().fg(ACCENT).bold()).centered(), banner_area);
+    }
     let [left, right] = Layout::horizontal([Constraint::Percentage(54), Constraint::Percentage(46)]).areas(body);
 
     draw_header(f, app, header);
@@ -36,7 +54,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 /// Block with a border that is highlighted while its pane has focus.
 fn pane(title: String, focused: bool) -> Block<'static> {
     let color = if focused { ACCENT } else { Color::DarkGray };
-    Block::bordered().border_style(Style::new().fg(color)).title(Span::styled(title, Style::new().fg(color).bold()))
+    Block::bordered().padding(Padding::horizontal(SIDE_PAD)).border_style(Style::new().fg(color)).title(Span::styled(title, Style::new().fg(color).bold()))
 }
 
 /// Truncates (with `…`) or pads `s` to exactly `w` characters.
@@ -76,6 +94,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     }
 
     let block = Block::bordered()
+        .padding(Padding::horizontal(SIDE_PAD))
         .border_style(Style::new().fg(Color::DarkGray))
         .title(Span::styled(format!(" ◆ OXIDE v{} ", env!("CARGO_PKG_VERSION")), Style::new().fg(ACCENT).bold()))
         .title_top(Line::from(right).right_aligned());
