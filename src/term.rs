@@ -19,8 +19,10 @@ const SCROLLBACK: usize = 5000;
 
 /// One shell running inside a repository.
 pub struct Term {
-    /// The directory the shell was started in.
+    /// The repository the shell belongs to.
     pub repo: PathBuf,
+    /// The directory the shell was started in: the repository, or a folder inside it.
+    pub dir: PathBuf,
     /// Screen state, fed by the reader thread and read by the UI.
     parser: Arc<Mutex<vt100::Parser>>,
     writer: Box<dyn Write + Send>,
@@ -33,14 +35,14 @@ pub struct Term {
 }
 
 impl Term {
-    /// Starts `$SHELL` (default `/bin/sh`) in `repo` with a screen of `rows` x `cols`.
-    pub fn spawn(repo: &Path, rows: u16, cols: u16) -> Result<Term, String> {
+    /// Starts `$SHELL` (default `/bin/sh`) for `repo`, inside `dir`, with a screen of `rows` x `cols`.
+    pub fn spawn(repo: &Path, dir: &Path, rows: u16, cols: u16) -> Result<Term, String> {
         let size = PtySize { rows, cols, pixel_width: 0, pixel_height: 0 };
         let pair = native_pty_system().openpty(size).map_err(|e| format!("cannot open a pseudo-terminal: {e}"))?;
 
         let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/sh".to_string());
         let mut cmd = CommandBuilder::new(&shell);
-        cmd.cwd(repo);
+        cmd.cwd(dir);
         cmd.env("TERM", "xterm-256color");
         let child = pair.slave.spawn_command(cmd).map_err(|e| format!("cannot run {shell}: {e}"))?;
         drop(pair.slave); // only the shell keeps the slave side, so the reader sees EOF when it exits
@@ -66,7 +68,7 @@ impl Term {
                 alive.store(false, Ordering::Relaxed);
             });
         }
-        Ok(Term { repo: repo.to_path_buf(), parser, writer, master: pair.master, child, alive, size: (rows, cols) })
+        Ok(Term { repo: repo.to_path_buf(), dir: dir.to_path_buf(), parser, writer, master: pair.master, child, alive, size: (rows, cols) })
     }
 
     /// The shell is still running.

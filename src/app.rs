@@ -2592,7 +2592,7 @@ impl App {
                         // The menu is only for the common case; anything else is done by hand.
                         Some(Choice::Other) => {
                             self.close_project();
-                            return self.open_terminal();
+                            return self.open_terminal_in(None);
                         }
                         None => return,
                     },
@@ -2672,15 +2672,27 @@ impl App {
         }
     }
 
-    /// Shows the embedded terminal of the selected repository, starting its shell on first use.
+    /// Shows the embedded terminal: from the changes list, in the folder of the highlighted file, else in the
+    /// repository.
     fn open_terminal(&mut self) {
+        let folder = match (self.focus, self.selected()) {
+            (Focus::Files, Some(r)) => self.file_state.selected().and_then(|i| r.files.get(i)).map(|f| folder_of(&r.path, &f.path)),
+            _ => None,
+        };
+        self.open_terminal_in(folder);
+    }
+
+    /// Shows the shell of the selected repository that runs in `dir` (the repository itself when None),
+    /// starting it on first use. Each folder has its own shell, which keeps running while hidden.
+    fn open_terminal_in(&mut self, dir: Option<PathBuf>) {
         let Some(path) = self.selected().map(|r| r.path.clone()) else { return };
-        let i = match self.terms.iter().position(|t| t.repo == path) {
+        let dir = dir.unwrap_or_else(|| path.clone());
+        let i = match self.terms.iter().position(|t| t.repo == path && t.dir == dir) {
             Some(i) => i,
             None => {
                 // The size is corrected to the real panel by the first frame.
                 let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-                match Term::spawn(&path, rows.saturating_sub(2), cols.saturating_sub(2)) {
+                match Term::spawn(&path, &dir, rows.saturating_sub(2), cols.saturating_sub(2)) {
                     Ok(t) => {
                         self.terms.push(t);
                         self.terms.len() - 1
@@ -2722,10 +2734,10 @@ impl App {
         if self.terms.iter().all(Term::alive) {
             return;
         }
-        let shown = self.term.and_then(|i| self.terms.get(i)).map(|t| t.repo.clone());
+        let shown = self.term.and_then(|i| self.terms.get(i)).map(|t| (t.repo.clone(), t.dir.clone()));
         let gone: Vec<PathBuf> = self.terms.iter().filter(|t| !t.alive()).map(|t| t.repo.clone()).collect();
         self.terms.retain(Term::alive);
-        self.term = shown.and_then(|p| self.terms.iter().position(|t| t.repo == p));
+        self.term = shown.and_then(|(repo, dir)| self.terms.iter().position(|t| t.repo == repo && t.dir == dir));
         if self.mode == Mode::Terminal && self.term.is_none() {
             self.mode = Mode::Normal;
         }
@@ -2778,6 +2790,19 @@ impl App {
 }
 
 /// Pinned repositories first, then the chosen sort order, then by name and path.
+/// The folder of `file` (a path inside `repo`; `dir/` for a whole untracked folder) as an absolute path. A file
+/// that is gone, with its folder, gives the nearest folder that still exists, at worst the repository.
+fn folder_of(repo: &Path, file: &str) -> PathBuf {
+    let mut dir = repo.join(file);
+    if !file.ends_with('/') {
+        dir.pop(); // a collapsed untracked folder is listed as `dir/` and is the folder itself
+    }
+    while dir != repo && !dir.is_dir() {
+        dir.pop();
+    }
+    if dir.starts_with(repo) { dir } else { repo.to_path_buf() }
+}
+
 fn compare(sort: Sort, a: &Repo, b: &Repo) -> Ordering {
     b.pinned
         .cmp(&a.pinned)

@@ -287,7 +287,13 @@ fn draw_project(f: &mut Frame, app: &mut App) {
 fn draw_terminal(f: &mut Frame, term: &mut Term) {
     let area = f.area();
     f.render_widget(Clear, area);
-    let name = term.repo.file_name().map_or_else(|| term.repo.display().to_string(), |n| n.to_string_lossy().into_owned());
+    let mut name = term.repo.file_name().map_or_else(|| term.repo.display().to_string(), |n| n.to_string_lossy().into_owned());
+    // A shell in a folder of the repository says which one.
+    if let Ok(rel) = term.dir.strip_prefix(&term.repo)
+        && !rel.as_os_str().is_empty()
+    {
+        name = format!("{name}/{}", rel.display());
+    }
     let hint = " Ctrl+T hide · Shift+PgUp/PgDn scroll · exit closes ";
     let block = pane(format!(" Terminal · {name} "), true).padding(Padding::ZERO).title_bottom(Line::from(Span::styled(hint, DIM)));
     let inner = block.inner(area);
@@ -1516,7 +1522,7 @@ fn draw_help(f: &mut Frame) {
         ("D", "DELETE the repository from disk (asks you to type its name)"),
         ("i y B S", "GitHub: issues / pull requests / repo in browser / find & clone"),
         ("e / o", "yazi on the file or repository / file manager"),
-        ("t / T", "embedded terminal in the repository (Ctrl+T hides it, the shell keeps running)"),
+        ("t / T", "embedded terminal in the repository, or in the highlighted file's folder from the changes list (Ctrl+T hides it)"),
         ("K", "new project in an empty repository: language, build tool, license"),
         ("* / x / H", "pin / ignore the repository / show ignored ones"),
         ("r", "remotes: add / change URL / rename / remove / fetch one"),
