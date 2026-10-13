@@ -57,6 +57,12 @@ pub enum PackageKind {
     Pascal,
     /// A Cabal package name: lowercase words joined by hyphens (Haskell).
     Hyphen,
+    /// A Perl module name with `::` between parts (`My::App`), which becomes `lib/My/App.pm`.
+    PerlModule,
+    /// An R package name: letters, digits and dots.
+    RPackage,
+    /// A Clojure namespace: lowercase words joined by hyphens, parts joined by dots (`my-app.core`).
+    Clojure,
     /// A PHP namespace, parts separated by backslashes (`Acme\\App`), mapped to `src/` by PSR-4.
     PhpNamespace,
 }
@@ -65,9 +71,10 @@ impl PackageKind {
     /// Name of the menu page and of the field on it.
     pub fn noun(self) -> &'static str {
         match self {
-            PackageKind::Packages | PackageKind::Importable | PackageKind::Snake | PackageKind::Pascal | PackageKind::Hyphen => "package",
+            PackageKind::Packages | PackageKind::Importable | PackageKind::Snake | PackageKind::Pascal | PackageKind::Hyphen | PackageKind::RPackage => "package",
             PackageKind::Module => "module",
-            PackageKind::Namespace | PackageKind::PhpNamespace => "namespace",
+            PackageKind::Namespace | PackageKind::PhpNamespace | PackageKind::Clojure => "namespace",
+            PackageKind::PerlModule => "module",
         }
     }
 
@@ -84,6 +91,9 @@ impl PackageKind {
             PackageKind::Snake => "lowercase letters, digits and _, starting with a letter",
             PackageKind::Pascal => "letters, digits and _, starting with a capital letter",
             PackageKind::Hyphen => "lowercase letters, digits and -, words joined by -, each with a letter",
+            PackageKind::PerlModule => "letters, digits and _ between ::; no leading digit",
+            PackageKind::RPackage => "letters, digits and dots; at least 2 characters, starting with a letter, not ending in a dot",
+            PackageKind::Clojure => "lowercase letters, digits and - in parts joined by dots, each starting with a letter",
             PackageKind::PhpNamespace => "letters, digits and _ between \\; no leading digit",
             PackageKind::Module => "letters, digits and . _ ~ - between slashes",
         }
@@ -96,16 +106,19 @@ impl PackageKind {
             PackageKind::Module => "Module path of go.mod, e.g. github.com/you/app.",
             PackageKind::Namespace => "Root namespace of the project, e.g. Company.App.",
             PackageKind::Importable => "Name the code is imported by, e.g. my_app; it becomes the folder under src/.",
-            PackageKind::Snake => "lowercase_snake_case name, e.g. my_app; it names the files in lib/.",
-            PackageKind::Pascal => "PascalCase package and module name, e.g. MyApp (Sources/MyApp).",
+            PackageKind::Snake => "lowercase_snake_case name, e.g. my_app; it names the main source file.",
+            PackageKind::Pascal => "PascalCase name, e.g. MyApp; it names the module and its files.",
             PackageKind::Hyphen => "Cabal package name: lowercase words joined by hyphens, e.g. my-app.",
+            PackageKind::PerlModule => "Module name with ::, e.g. My::App; it becomes lib/My/App.pm.",
+            PackageKind::RPackage => "R package name, e.g. mypkg: letters, digits and dots.",
+            PackageKind::Clojure => "Main namespace, e.g. my-app.core; it becomes src/my_app/core.clj.",
             PackageKind::PhpNamespace => "Root namespace with backslashes, e.g. Acme\\App (PSR-4, mapped to src/).",
         }
     }
 }
 
 /// The question a package-like language asks, with its suggested answer. The suggestion may use `{pkg}`,
-/// `{slug}`, `{Pascal}` (`MyApp`), `{user}` and `{PascalUser}` (the owner's name in PascalCase).
+/// `{slug}`, `{dotted}` (`my.app`), `{Pascal}` (`MyApp`), `{user}` and `{PascalUser}` (the owner's name in PascalCase).
 #[derive(Clone, Copy)]
 pub struct Package {
     pub kind: PackageKind,
@@ -390,17 +403,21 @@ const BUILTIN: &[Lang] = &[
         name: "R",
         key: "r",
         ignore: "",
-        package: None,
-        variants: &[v("Scripts", "R/, data/, main.R", &[File("main.R", R_MAIN), Dir("R"), Dir("data")])],
+        package: Some(Package { kind: PackageKind::RPackage, suggest: "{dotted}" }),
+        variants: &[v("Package", "DESCRIPTION, NAMESPACE, R/", &[
+            File("DESCRIPTION", R_DESCRIPTION),
+            File("NAMESPACE", "exportPattern(\"^[[:alpha:]]+\")\n"),
+            File("R/hello.R", R_MAIN),
+        ])],
     },
     Lang {
         name: "Julia",
         key: "julia",
         ignore: "",
-        package: None,
+        package: Some(Package { kind: PackageKind::Pascal, suggest: "{Pascal}" }),
         variants: &[v("Package", "Project.toml, src/, test/", &[
             File("Project.toml", JULIA_PROJECT),
-            File("src/{pkg}.jl", JULIA_MAIN),
+            File("src/{package}.jl", JULIA_MAIN),
             Dir("test"),
         ])],
     },
@@ -419,10 +436,10 @@ const BUILTIN: &[Lang] = &[
         name: "Nim",
         key: "nim",
         ignore: "",
-        package: None,
+        package: Some(Package { kind: PackageKind::Snake, suggest: "{pkg}" }),
         variants: &[v("Nimble", "nimble file, src/", &[
-            File("{slug}.nimble", NIM_NIMBLE),
-            File("src/{pkg}.nim", NIM_MAIN),
+            File("{package}.nimble", NIM_NIMBLE),
+            File("src/{package}.nim", NIM_MAIN),
             Dir("tests"),
         ])],
     },
@@ -430,11 +447,11 @@ const BUILTIN: &[Lang] = &[
         name: "Perl",
         key: "perl",
         ignore: "",
-        package: None,
+        package: Some(Package { kind: PackageKind::PerlModule, suggest: "{Pascal}" }),
         variants: &[v("Plain", "script/, lib/, t/, cpanfile", &[
             File("script/main.pl", PERL_MAIN),
+            File("lib/{package_path}.pm", PERL_MODULE),
             File("cpanfile", "# requires 'Some::Module';\n"),
-            Dir("lib"),
             Dir("t"),
         ])],
     },
@@ -442,10 +459,10 @@ const BUILTIN: &[Lang] = &[
         name: "Clojure",
         key: "clojure",
         ignore: "",
-        package: None,
+        package: Some(Package { kind: PackageKind::Clojure, suggest: "{slug}.core" }),
         variants: &[v("deps.edn", "deps.edn, src/, test/", &[
             File("deps.edn", CLJ_DEPS),
-            File("src/{pkg}/core.clj", CLJ_MAIN),
+            File("src/{package_path}.clj", CLJ_MAIN),
             Dir("test"),
         ])],
     },
@@ -506,7 +523,7 @@ impl Plan {
                 .replace("{slug}", &slug)
                 .replace("{user}", &user)
                 .replace("{Pascal}", &pascal_name)
-                .replace("{package_path}", &package.replace(['.', '\\'], "/"))
+                .replace("{package_path}", &package.replace("::", "/").replace(['.', '\\'], "/").replace('-', "_"))
                 .replace("{PackagePascal}", &pascal(package))
                 .replace("{package_json}", &package.replace('\\', "\\\\"))
                 .replace("{package}", package)
@@ -633,6 +650,7 @@ pub fn default_package(root: &Path, lang: &Lang, holder: &str) -> Option<String>
         p.suggest
             .replace("{pkg}", &ident(&name, '_', "app"))
             .replace("{slug}", &ident(&name, '-', "app"))
+            .replace("{dotted}", &ident(&name, '.', "app"))
             .replace("{PascalUser}", &pascal(holder))
             .replace("{Pascal}", &pascal(&name))
             .replace("{user}", &ident(holder, '-', "user"))
@@ -643,7 +661,7 @@ pub fn default_package(root: &Path, lang: &Lang, holder: &str) -> Option<String>
 /// holds the main code); for a module or namespace, exactly one. The error says what is wrong.
 pub fn parse_packages(text: &str, kind: PackageKind) -> Result<Vec<String>, String> {
     // Identifiers joined by `sep`: letters, digits and `_`, none starting with a digit.
-    let joined = |name: &str, sep: Option<char>| {
+    let joined = |name: &str, sep: Option<&str>| {
         let mut parts: Box<dyn Iterator<Item = &str>> = match sep {
             Some(c) => Box::new(name.split(c)),
             None => Box::new(std::iter::once(name)),
@@ -657,14 +675,21 @@ pub fn parse_packages(text: &str, kind: PackageKind) -> Result<Vec<String>, Stri
     let mut out: Vec<String> = Vec::new();
     for name in &names {
         let ok = match kind {
-            PackageKind::Packages | PackageKind::Namespace => joined(name, Some('.')),
+            PackageKind::Packages | PackageKind::Namespace => joined(name, Some(".")),
+            PackageKind::PerlModule => joined(name, Some("::")),
             PackageKind::Importable => joined(name, None),
+            PackageKind::RPackage => {
+                name.len() >= 2 && name.starts_with(|c: char| c.is_ascii_alphabetic()) && !name.ends_with('.') && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '.')
+            }
+            PackageKind::Clojure => name.split('.').all(|part| {
+                part.starts_with(|c: char| c.is_ascii_lowercase()) && !part.ends_with('-') && part.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            }),
             PackageKind::Pascal => name.starts_with(|c: char| c.is_ascii_uppercase()) && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
             PackageKind::Hyphen => {
                 name.split('-').all(|word| word.chars().any(|c| c.is_ascii_lowercase()) && word.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()))
             }
             PackageKind::Snake => name.starts_with(|c: char| c.is_ascii_lowercase()) && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
-            PackageKind::PhpNamespace => joined(name, Some('\\')),
+            PackageKind::PhpNamespace => joined(name, Some("\\")),
             // A module path is a URL-like path: no spaces, no empty parts.
             PackageKind::Module => name.split('/').all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric() || "._~-".contains(c))),
         };
@@ -1052,11 +1077,13 @@ lazy val root = (project in file("."))
 
 const SCALA_MAIN: &str = "package {package}\n\n@main def main(): Unit =\n  println(\"Hello, world!\")\n";
 
-const R_MAIN: &str = "cat(\"Hello, world!\\n\")\n";
+const R_MAIN: &str = "hello <- function() {\n  \"Hello, world!\"\n}\n";
 
-const JULIA_PROJECT: &str = "name = \"{pkg}\"\nversion = \"0.1.0\"\n";
+const R_DESCRIPTION: &str = "Package: {package}\nType: Package\nTitle: What the Package Does (Title Case)\nVersion: 0.1.0\nDescription: One paragraph describing what the package does.\nLicense: file LICENSE\nEncoding: UTF-8\n";
 
-const JULIA_MAIN: &str = "module {pkg}\n\ngreet() = println(\"Hello, world!\")\n\nend # module\n";
+const JULIA_PROJECT: &str = "name = \"{package}\"\nversion = \"0.1.0\"\n";
+
+const JULIA_MAIN: &str = "module {package}\n\ngreet() = println(\"Hello, world!\")\n\nend # module\n";
 
 const SHELL_MAIN: &str = "#!/usr/bin/env bash\nset -euo pipefail\n\necho \"Hello, world!\"\n";
 
@@ -1065,15 +1092,17 @@ author        = "{user}"
 description   = "{slug}"
 license       = "MIT"
 srcDir        = "src"
-bin           = @["{pkg}"]
+bin           = @["{package}"]
 
 requires "nim >= 2.0.0"
 "##;
 
 const NIM_MAIN: &str = "echo \"Hello, world!\"\n";
 
-const PERL_MAIN: &str = "#!/usr/bin/env perl\nuse strict;\nuse warnings;\n\nprint \"Hello, world!\\n\";\n";
+const PERL_MAIN: &str = "#!/usr/bin/env perl\nuse strict;\nuse warnings;\nuse FindBin qw($RealBin);\nuse lib \"$RealBin/../lib\";\nuse {package};\n\nprint {package}->greet, \"\\n\";\n";
 
-const CLJ_DEPS: &str = "{:paths [\"src\"]\n :deps {org.clojure/clojure {:mvn/version \"1.12.0\"}}\n :aliases {:test {:extra-paths [\"test\"]}}}\n";
+const PERL_MODULE: &str = "package {package};\n\nuse strict;\nuse warnings;\n\nour $VERSION = '0.01';\n\nsub greet {\n    return 'Hello, world!';\n}\n\n1;\n";
 
-const CLJ_MAIN: &str = "(ns {pkg}.core)\n\n(defn -main [& _args]\n  (println \"Hello, world!\"))\n";
+const CLJ_DEPS: &str = "{:paths [\"src\"]\n :deps {org.clojure/clojure {:mvn/version \"1.12.0\"}}\n :aliases {:run {:main-opts [\"-m\" \"{package}\"]}\n           :test {:extra-paths [\"test\"]}}}\n";
+
+const CLJ_MAIN: &str = "(ns {package})\n\n(defn -main [& _args]\n  (println \"Hello, world!\"))\n";
