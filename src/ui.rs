@@ -149,6 +149,7 @@ fn draw_project(f: &mut Frame, app: &mut App) {
     let name = v.repo.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     let page = match v.step {
         ProjectStep::Lang => "language",
+        ProjectStep::Package => "package",
         ProjectStep::Variant => "variant",
         ProjectStep::License => "license",
         ProjectStep::Confirm => "confirm",
@@ -158,6 +159,7 @@ fn draw_project(f: &mut Frame, app: &mut App) {
     // Rows of the page's list plus the lines around it (borders, filter or holder line).
     let (rows, extra) = match v.step {
         ProjectStep::Lang => (v.choices().len(), 4),
+        ProjectStep::Package => (3, 4),
         ProjectStep::Variant => (langs()[v.lang].variants.len(), 3),
         ProjectStep::License => (LICENSES.len() + 1, 4),
         // The plan, a line for programs that are missing and the lines around them.
@@ -203,6 +205,17 @@ fn draw_project(f: &mut Frame, app: &mut App) {
                 .collect();
             f.render_stateful_widget(List::new(items).highlight_style(INVERSE), list, &mut v.lang_state);
         }
+        ProjectStep::Package => {
+            let mut lines = vec![
+                Line::from(Span::styled("Package names, separated by commas; the first one holds the main code.", DIM)),
+                Line::raw(""),
+                Line::from(vec![Span::styled("Package ▸ ", hue(BOLD, ACCENT)), Span::styled(v.package.clone(), BOLD), Span::styled("█", PLAIN)]),
+            ];
+            if let Some(e) = &v.package_error {
+                lines.push(Line::from(Span::styled(fit(e, inner.width as usize), hue(BOLD, BAD))));
+            }
+            f.render_widget(Paragraph::new(lines), inner);
+        }
         ProjectStep::Variant => {
             let lang = &langs()[v.lang];
             let note_w = (inner.width as usize).saturating_sub(24);
@@ -241,8 +254,9 @@ fn draw_project(f: &mut Frame, app: &mut App) {
             let lang = &langs()[v.lang];
             let variant = lang.variants[v.variant_state.selected().unwrap_or(0)].name;
             let license = v.license().map_or("no license", |l| l.id);
+            let packages = if v.packages.is_empty() { String::new() } else { format!(" · {}", v.packages.join(", ")) };
             let mut lines = vec![
-                Line::from(Span::styled(format!("{} · {variant} · {license}", lang.name), BOLD)),
+                Line::from(Span::styled(fit(&format!("{} · {variant}{packages} · {license}", lang.name), inner.width as usize), BOLD)),
                 Line::from(Span::styled(fit(&format!("in {}", v.repo.display()), inner.width as usize), DIM)),
                 Line::raw(""),
             ];
@@ -843,6 +857,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     if let (Mode::Project, Some(v)) = (app.mode, &app.project) {
         let hints: &[(&str, &str)] = match (v.step, v.editing) {
             (ProjectStep::Lang, _) => &[("↑↓", "move"), ("type", "filter"), ("Enter", "select"), ("Esc", "clear/close")],
+            (ProjectStep::Package, _) => &[("type", "package names"), ("Enter", "continue"), ("Esc", "back")],
             (ProjectStep::Variant, _) => &[("↑↓", "move"), ("Enter", "select"), ("Esc", "back")],
             (ProjectStep::License, false) => &[("↑↓", "move"), ("Tab", "edit holder"), ("Enter", "continue"), ("Esc", "back")],
             (ProjectStep::License, true) => &[("type", "copyright holder"), ("Enter", "done")],

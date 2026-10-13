@@ -47,6 +47,10 @@ pub struct Lang {
     pub key: &'static str,
     /// Extra `.gitignore` lines for languages defined in `config.lua`; empty for the built-in ones.
     pub ignore: &'static str,
+    /// For languages whose code lives in packages: the suggested package, which the menu asks about before
+    /// the variant. Placeholders work as in steps. Steps use it as `{package}` (`com.example.app`) and
+    /// `{package_path}` (`com/example/app`).
+    pub package: Option<&'static str>,
     /// Never empty; the first one is the default.
     pub variants: &'static [Variant],
 }
@@ -81,6 +85,7 @@ const BUILTIN: &[Lang] = &[
         name: "Rust",
         key: "rust",
         ignore: "",
+        package: None,
         variants: &[
             v("Binary", "cargo init", &[Run("cargo init --name {pkg}")]),
             v("Library", "cargo init --lib", &[Run("cargo init --lib --name {pkg}")]),
@@ -90,6 +95,7 @@ const BUILTIN: &[Lang] = &[
         name: "Python",
         key: "python",
         ignore: "",
+        package: None,
         variants: &[
             v("venv + pip", "src/ layout, pyproject.toml, .venv", &[
                 Run("python3 -m venv .venv"),
@@ -105,6 +111,7 @@ const BUILTIN: &[Lang] = &[
         name: "JavaScript",
         key: "node",
         ignore: "",
+        package: None,
         variants: &[
             v("npm", "npm init -y, src/", &[Run("npm init -y"), File("src/index.js", JS_MAIN)]),
             v("pnpm", "pnpm init, src/", &[Run("pnpm init"), File("src/index.js", JS_MAIN)]),
@@ -115,6 +122,7 @@ const BUILTIN: &[Lang] = &[
         name: "TypeScript",
         key: "node",
         ignore: "",
+        package: None,
         variants: &[
             v("npm", "npm init -y, typescript, tsconfig.json", &[
                 Run("npm init -y"),
@@ -129,6 +137,7 @@ const BUILTIN: &[Lang] = &[
         name: "Go",
         key: "go",
         ignore: "",
+        package: None,
         variants: &[v("Module", "go mod init, cmd/ and internal/", &[
             Run("go mod init {slug}"),
             File("cmd/{pkg}/main.go", GO_MAIN),
@@ -139,23 +148,27 @@ const BUILTIN: &[Lang] = &[
         name: "Java",
         key: "java",
         ignore: "",
+        package: Some("com.example.{pkg}"),
         variants: &[
             v("Maven", "pom.xml, src/main/java, src/test/java", &[
                 File("pom.xml", JAVA_POM),
-                File("src/main/java/com/example/Main.java", JAVA_MAIN),
-                Dir("src/test/java/com/example"),
+                File("src/main/java/{package_path}/Main.java", JAVA_MAIN),
+                Dir("src/main/java/{package_path}"),
+                Dir("src/test/java/{package_path}"),
             ]),
             v("Gradle (Groovy)", "build.gradle, settings.gradle", &[
                 File("settings.gradle", "rootProject.name = '{slug}'\n"),
                 File("build.gradle", JAVA_GRADLE),
-                File("src/main/java/com/example/Main.java", JAVA_MAIN),
-                Dir("src/test/java/com/example"),
+                File("src/main/java/{package_path}/Main.java", JAVA_MAIN),
+                Dir("src/main/java/{package_path}"),
+                Dir("src/test/java/{package_path}"),
             ]),
             v("Gradle (Kotlin DSL)", "build.gradle.kts, settings.gradle.kts", &[
                 File("settings.gradle.kts", "rootProject.name = \"{slug}\"\n"),
                 File("build.gradle.kts", JAVA_GRADLE_KTS),
-                File("src/main/java/com/example/Main.java", JAVA_MAIN),
-                Dir("src/test/java/com/example"),
+                File("src/main/java/{package_path}/Main.java", JAVA_MAIN),
+                Dir("src/main/java/{package_path}"),
+                Dir("src/test/java/{package_path}"),
             ]),
         ],
     },
@@ -163,17 +176,20 @@ const BUILTIN: &[Lang] = &[
         name: "Kotlin",
         key: "kotlin",
         ignore: "",
+        package: Some("com.example.{pkg}"),
         variants: &[v("Gradle (Kotlin DSL)", "build.gradle.kts, src/main/kotlin", &[
             File("settings.gradle.kts", "rootProject.name = \"{slug}\"\n"),
             File("build.gradle.kts", KOTLIN_GRADLE),
-            File("src/main/kotlin/Main.kt", KOTLIN_MAIN),
-            Dir("src/test/kotlin"),
+            File("src/main/kotlin/{package_path}/Main.kt", KOTLIN_MAIN),
+            Dir("src/main/kotlin/{package_path}"),
+            Dir("src/test/kotlin/{package_path}"),
         ])],
     },
     Lang {
         name: "C",
         key: "c",
         ignore: "",
+        package: None,
         variants: &[v("Makefile", "Makefile, src/, include/", &[
             File("Makefile", C_MAKEFILE),
             File("src/main.c", C_MAIN),
@@ -184,6 +200,7 @@ const BUILTIN: &[Lang] = &[
         name: "C++",
         key: "cpp",
         ignore: "",
+        package: None,
         variants: &[
             v("CMake", "CMakeLists.txt, src/, include/", &[
                 File("CMakeLists.txt", CPP_CMAKE),
@@ -201,6 +218,7 @@ const BUILTIN: &[Lang] = &[
         name: "C#",
         key: "csharp",
         ignore: "",
+        package: None,
         variants: &[
             v("Console", "dotnet new console", &[Run("dotnet new console --name {slug} --output .")]),
             v("Class library", "dotnet new classlib", &[Run("dotnet new classlib --name {slug} --output .")]),
@@ -210,6 +228,7 @@ const BUILTIN: &[Lang] = &[
         name: "PHP",
         key: "php",
         ignore: "",
+        package: None,
         variants: &[v("Composer", "composer init, src/", &[
             Run("composer init --no-interaction --name={user}/{pkg}"),
             File("src/index.php", PHP_MAIN),
@@ -219,6 +238,7 @@ const BUILTIN: &[Lang] = &[
         name: "Ruby",
         key: "ruby",
         ignore: "",
+        package: None,
         variants: &[v("Bundler", "bundle init, lib/", &[
             Run("bundle init"),
             File("lib/{pkg}.rb", RUBY_MAIN),
@@ -229,6 +249,7 @@ const BUILTIN: &[Lang] = &[
         name: "Swift",
         key: "swift",
         ignore: "",
+        package: None,
         variants: &[
             v("Executable", "swift package init", &[Run("swift package init --type executable --name {pkg}")]),
             v("Library", "swift package init --type library", &[Run("swift package init --type library --name {pkg}")]),
@@ -238,53 +259,62 @@ const BUILTIN: &[Lang] = &[
         name: "Dart",
         key: "dart",
         ignore: "",
+        package: None,
         variants: &[v("Console", "dart create", &[Run("dart create --force --template console .")])],
     },
     Lang {
         name: "Lua",
         key: "lua",
         ignore: "",
+        package: None,
         variants: &[v("Plain", "src/main.lua, tests/", &[File("src/main.lua", LUA_MAIN), Dir("tests")])],
     },
     Lang {
         name: "Zig",
         key: "zig",
         ignore: "",
+        package: None,
         variants: &[v("zig init", "zig init", &[Run("zig init")])],
     },
     Lang {
         name: "Elixir",
         key: "elixir",
         ignore: "",
+        package: None,
         variants: &[v("Mix", "mix new", &[Run("mix new . --app {pkg}")])],
     },
     Lang {
         name: "Haskell",
         key: "haskell",
         ignore: "",
+        package: None,
         variants: &[v("Cabal", "cabal init, app/", &[Run("cabal init --non-interactive --exe --package-name={slug}")])],
     },
     Lang {
         name: "Scala",
         key: "scala",
         ignore: "",
+        package: Some("com.example.{pkg}"),
         variants: &[v("sbt", "build.sbt, src/main/scala", &[
             File("build.sbt", SCALA_SBT),
             File("project/build.properties", "sbt.version=1.10.7\n"),
-            File("src/main/scala/Main.scala", SCALA_MAIN),
-            Dir("src/test/scala"),
+            File("src/main/scala/{package_path}/Main.scala", SCALA_MAIN),
+            Dir("src/main/scala/{package_path}"),
+            Dir("src/test/scala/{package_path}"),
         ])],
     },
     Lang {
         name: "R",
         key: "r",
         ignore: "",
+        package: None,
         variants: &[v("Scripts", "R/, data/, main.R", &[File("main.R", R_MAIN), Dir("R"), Dir("data")])],
     },
     Lang {
         name: "Julia",
         key: "julia",
         ignore: "",
+        package: None,
         variants: &[v("Package", "Project.toml, src/, test/", &[
             File("Project.toml", JULIA_PROJECT),
             File("src/{pkg}.jl", JULIA_MAIN),
@@ -295,6 +325,7 @@ const BUILTIN: &[Lang] = &[
         name: "Shell",
         key: "shell",
         ignore: "",
+        package: None,
         variants: &[v("Script", "bin/ script, lib/", &[
             File("bin/{slug}", SHELL_MAIN),
             Run("chmod +x bin/{slug}"),
@@ -305,6 +336,7 @@ const BUILTIN: &[Lang] = &[
         name: "Nim",
         key: "nim",
         ignore: "",
+        package: None,
         variants: &[v("Nimble", "nimble file, src/", &[
             File("{slug}.nimble", NIM_NIMBLE),
             File("src/{pkg}.nim", NIM_MAIN),
@@ -315,6 +347,7 @@ const BUILTIN: &[Lang] = &[
         name: "Perl",
         key: "perl",
         ignore: "",
+        package: None,
         variants: &[v("Plain", "script/, lib/, t/, cpanfile", &[
             File("script/main.pl", PERL_MAIN),
             File("cpanfile", "# requires 'Some::Module';\n"),
@@ -326,6 +359,7 @@ const BUILTIN: &[Lang] = &[
         name: "Clojure",
         key: "clojure",
         ignore: "",
+        package: None,
         variants: &[v("deps.edn", "deps.edn, src/, test/", &[
             File("deps.edn", CLJ_DEPS),
             File("src/{pkg}/core.clj", CLJ_MAIN),
@@ -377,10 +411,21 @@ pub struct Plan {
 impl Plan {
     /// The plan for `root`: the variant's steps, then a `.gitignore` for the language, a README
     /// and the license (when one was chosen) with `holder` and `year` in its copyright line.
-    pub fn build(root: &Path, lang: &Lang, variant: &Variant, license: Option<&License>, holder: &str, year: i64) -> Plan {
+    pub fn build(root: &Path, lang: &Lang, variant: &Variant, packages: &[String], license: Option<&License>, holder: &str, year: i64) -> Plan {
         let name = project_name(root);
         let (pkg, slug, user) = (ident(&name, '_', "app"), ident(&name, '-', "app"), ident(holder, '_', "app"));
-        let fill = |s: &str| s.replace("{name}", &name).replace("{pkg}", &pkg).replace("{slug}", &slug).replace("{user}", &user);
+        // `{package}` is the first package: the one that holds the main code. Directories that mention a
+        // package are made for every package, so the others get their (empty) folders too.
+        let fill_for = |s: &str, package: &str| {
+            s.replace("{name}", &name)
+                .replace("{pkg}", &pkg)
+                .replace("{slug}", &slug)
+                .replace("{user}", &user)
+                .replace("{package_path}", &package.replace('.', "/"))
+                .replace("{package}", package)
+        };
+        let main = packages.first().map_or("", String::as_str);
+        let fill = |s: &str| fill_for(s, main);
 
         let mut actions = Vec::new();
         let mut missing: Vec<String> = Vec::new();
@@ -397,11 +442,17 @@ impl Plan {
                     }
                 }
                 Dir(path) => {
-                    // An empty directory would not exist in Git, so it gets a marker file, unless a file lands in it.
-                    let path = fill(path);
-                    let prefix = format!("{path}/");
-                    if !variant.steps.iter().any(|s| matches!(s, File(f, _) if fill(f).starts_with(&prefix))) {
-                        actions.push(Action::File { path: format!("{path}/.gitkeep"), text: String::new(), mode: Write::IfMissing });
+                    let each: Vec<String> = if path.contains("{package") && packages.len() > 1 {
+                        packages.iter().map(|p| fill_for(path, p)).collect()
+                    } else {
+                        vec![fill(path)]
+                    };
+                    for path in each {
+                        // An empty directory would not exist in Git, so it gets a marker file, unless a file lands in it.
+                        let prefix = format!("{path}/");
+                        if !variant.steps.iter().any(|s| matches!(s, File(f, _) if fill(f).starts_with(&prefix))) {
+                            actions.push(Action::File { path: format!("{path}/.gitkeep"), text: String::new(), mode: Write::IfMissing });
+                        }
                     }
                 }
                 File(path, text) => actions.push(Action::File { path: fill(path), text: fill(text), mode: Write::Always }),
@@ -486,6 +537,31 @@ fn merge_lines(old: &str, template: &str) -> Option<String> {
     }
     let sep = if old.is_empty() { "" } else if old.ends_with('\n') { "\n" } else { "\n\n" };
     Some(format!("{old}{sep}{}\n", add.join("\n\n").trim_end()))
+}
+
+/// The package suggested for a project in `root`, for a language that asks for one.
+pub fn default_package(root: &Path, lang: &Lang) -> Option<String> {
+    let name = project_name(root);
+    lang.package.map(|p| p.replace("{pkg}", &ident(&name, '_', "app")).replace("{slug}", &ident(&name, '-', "app")))
+}
+
+/// The packages in what was typed: names separated by commas, each parts separated by dots. The first one holds
+/// the main code. The error says what is wrong with the first bad name.
+pub fn parse_packages(text: &str) -> Result<Vec<String>, String> {
+    let mut out: Vec<String> = Vec::new();
+    for name in text.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+        let ok = name.split('.').all(|part| {
+            let mut chars = part.chars();
+            chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        });
+        if !ok {
+            return Err(format!("'{name}' is not a valid package (letters, digits, _ and dots; no leading digit)"));
+        }
+        if !out.iter().any(|p| p == name) {
+            out.push(name.to_string());
+        }
+    }
+    if out.is_empty() { Err("write at least one package name".to_string()) } else { Ok(out) }
 }
 
 /// A repository can be set up when nothing is in it but Git's own `.git` (a folder, or a file in worktrees).
@@ -576,7 +652,7 @@ func main() {
 }
 "##;
 
-const JAVA_MAIN: &str = r##"package com.example;
+const JAVA_MAIN: &str = r##"package {package};
 
 public class Main {
     public static void main(String[] args) {
@@ -591,7 +667,7 @@ const JAVA_POM: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
-  <groupId>com.example</groupId>
+  <groupId>{package}</groupId>
   <artifactId>{slug}</artifactId>
   <version>0.1.0-SNAPSHOT</version>
   <packaging>jar</packaging>
@@ -643,7 +719,7 @@ java {
 }
 
 application {
-    mainClass = 'com.example.Main'
+    mainClass = '{package}.Main'
 }
 
 tasks.named('test') {
@@ -672,7 +748,7 @@ java {
 }
 
 application {
-    mainClass = "com.example.Main"
+    mainClass = "{package}.Main"
 }
 
 tasks.test {
@@ -698,7 +774,7 @@ kotlin {
 }
 
 application {
-    mainClass = "MainKt"
+    mainClass = "{package}.MainKt"
 }
 
 tasks.test {
@@ -706,7 +782,7 @@ tasks.test {
 }
 "##;
 
-const KOTLIN_MAIN: &str = "fun main() {\n    println(\"Hello, world!\")\n}\n";
+const KOTLIN_MAIN: &str = "package {package}\n\nfun main() {\n    println(\"Hello, world!\")\n}\n";
 
 const C_MAKEFILE: &str = "\
 CC      ?= cc
@@ -787,7 +863,7 @@ lazy val root = (project in file("."))
   )
 "##;
 
-const SCALA_MAIN: &str = "@main def main(): Unit =\n  println(\"Hello, world!\")\n";
+const SCALA_MAIN: &str = "package {package}\n\n@main def main(): Unit =\n  println(\"Hello, world!\")\n";
 
 const R_MAIN: &str = "cat(\"Hello, world!\\n\")\n";
 

@@ -175,7 +175,8 @@ fn read_variant(t: &Table, name: String) -> Result<Variant, String> {
 }
 
 /// The `languages` option: a list of tables, each with `name`, optionally `ignore` (`.gitignore` lines),
-/// `key` (a built-in `.gitignore` template such as `"rust"`) and either `variants` (a list of tables with
+/// `key` (a built-in `.gitignore` template such as `"rust"`), `package` (a suggested package name such as
+/// `"com.example.{pkg}"`; the menu then asks for packages and steps can use `{package}` and `{package_path}`) and either `variants` (a list of tables with
 /// `name`, `note`, `run`, `dirs`, `files`) or those same fields directly for a language with one setup.
 /// `run` lines may use `{name}`, `{slug}`, `{pkg}` and `{user}`. Entries that do not fit are skipped; the
 /// first problem is returned so it can be logged.
@@ -205,7 +206,8 @@ fn read_languages(conf: &Table) -> (Vec<Lang>, Option<String>) {
                 return Err(format!("{name}: variants is empty"));
             }
             let key = t.get::<Option<String>>("key").ok().flatten().unwrap_or_default();
-            Ok(Lang { name: keep(name), key: keep(key), ignore: keep(strings(&t, "ignore").join("\n")), variants: variants.leak() })
+            let package = t.get::<Option<String>>("package").ok().flatten().map(keep);
+            Ok(Lang { name: keep(name), key: keep(key), ignore: keep(strings(&t, "ignore").join("\n")), package, variants: variants.leak() })
         });
         match one {
             Ok(l) => langs.push(l),

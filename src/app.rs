@@ -346,6 +346,8 @@ pub struct Confirm {
 #[derive(Clone, Copy, PartialEq)]
 pub enum ProjectStep {
     Lang,
+    /// Package names, for languages that keep their code in packages.
+    Package,
     Variant,
     License,
     Confirm,
@@ -372,6 +374,12 @@ pub struct ProjectView {
     pub variant_state: ListState,
     /// Selection on the license page; `LICENSES.len()` is "no license".
     pub license_state: ListState,
+    /// Package names being typed on the package page (comma-separated).
+    pub package: String,
+    /// Why `package` was refused.
+    pub package_error: Option<String>,
+    /// The packages accepted on the package page; empty for a language without them.
+    pub packages: Vec<String>,
     /// Copyright holder of the LICENSE, edited on the license page.
     pub holder: String,
     /// The holder is being typed instead of the list being moved.
@@ -392,6 +400,29 @@ impl ProjectView {
             out.push(Choice::Other);
         }
         out
+    }
+
+    /// The page after the language page: package names if the language has packages, else the variants (when
+    /// there is a choice) or the license.
+    fn after_lang(&self) -> ProjectStep {
+        let lang = &langs()[self.lang];
+        if lang.package.is_some() { ProjectStep::Package } else { self.after_package() }
+    }
+
+    fn after_package(&self) -> ProjectStep {
+        if langs()[self.lang].variants.len() > 1 { ProjectStep::Variant } else { ProjectStep::License }
+    }
+
+    /// The page `Esc` returns to from the license page.
+    fn before_license(&self) -> ProjectStep {
+        let lang = &langs()[self.lang];
+        if lang.variants.len() > 1 {
+            ProjectStep::Variant
+        } else if lang.package.is_some() {
+            ProjectStep::Package
+        } else {
+            ProjectStep::Lang
+        }
     }
 
     /// The chosen license; None for "no license".
@@ -2509,6 +2540,9 @@ impl App {
             lang: 0,
             variant_state: ListState::default().with_selected(Some(0)),
             license_state: ListState::default().with_selected(Some(0)),
+            package: String::new(),
+            package_error: None,
+            packages: Vec::new(),
             holder,
             editing: false,
             year: logger::year(),
@@ -2549,7 +2583,10 @@ impl App {
                         Some(Choice::Lang(i)) => {
                             v.lang = *i;
                             v.variant_state.select(Some(0));
-                            v.step = if langs()[*i].variants.len() > 1 { ProjectStep::Variant } else { ProjectStep::License };
+                            v.package = scaffold::default_package(&v.repo, &langs()[*i]).unwrap_or_default();
+                            v.package_error = None;
+                            v.packages.clear();
+                            v.step = v.after_lang();
                             return;
                         }
                         // The menu is only for the common case; anything else is done by hand.
@@ -2574,8 +2611,29 @@ impl App {
                 let n = v.choices().len();
                 v.lang_state.select(step(Some(0), n, 0));
             }
+            ProjectStep::Package => match key.code {
+                KeyCode::Esc => v.step = ProjectStep::Lang,
+                KeyCode::Enter => match scaffold::parse_packages(&v.package) {
+                    Ok(packages) => {
+                        v.packages = packages;
+                        v.package_error = None;
+                        v.step = v.after_package();
+                    }
+                    Err(e) => v.package_error = Some(e),
+                },
+                KeyCode::Backspace => {
+                    v.package.pop();
+                    v.package_error = None;
+                }
+                KeyCode::Char('u') if ctrl => v.package.clear(),
+                KeyCode::Char(c) if !ctrl => {
+                    v.package.push(c);
+                    v.package_error = None;
+                }
+                _ => {}
+            },
             ProjectStep::Variant => match key.code {
-                KeyCode::Esc | KeyCode::Backspace => v.step = ProjectStep::Lang,
+                KeyCode::Esc | KeyCode::Backspace => v.step = if langs()[v.lang].package.is_some() { ProjectStep::Package } else { ProjectStep::Lang },
                 KeyCode::Enter => v.step = ProjectStep::License,
                 _ => v.variant_state.select(step(v.variant_state.selected(), langs()[v.lang].variants.len(), delta)),
             },
@@ -2589,14 +2647,12 @@ impl App {
                 _ => {}
             },
             ProjectStep::License => match key.code {
-                KeyCode::Esc | KeyCode::Backspace => {
-                    v.step = if langs()[v.lang].variants.len() > 1 { ProjectStep::Variant } else { ProjectStep::Lang };
-                }
+                KeyCode::Esc | KeyCode::Backspace => v.step = v.before_license(),
                 KeyCode::Tab => v.editing = true,
                 KeyCode::Enter => {
                     let lang = &langs()[v.lang];
                     let variant = &lang.variants[v.variant_state.selected().unwrap_or(0)];
-                    v.plan = Some(Plan::build(&v.repo, lang, variant, v.license(), v.holder.trim(), v.year));
+                    v.plan = Some(Plan::build(&v.repo, lang, variant, &v.packages, v.license(), v.holder.trim(), v.year));
                     v.step = ProjectStep::Confirm;
                 }
                 // One extra row after the licenses: no LICENSE file.
