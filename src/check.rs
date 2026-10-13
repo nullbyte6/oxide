@@ -146,17 +146,22 @@ fn lint(variant: &Variant) -> Option<String> {
         .map(|w| format!("unknown placeholder {{{w}}} in the language table"))
 }
 
-/// Single lowercase words are ordinary code in braces (`{x}`); placeholders are known ones, so anything that
-/// resembles one (starts with a known name) but is not known is a typo.
+/// Single words are ordinary code in braces (`{x}`); placeholders are known ones, so anything that resembles one
+/// (starts like a known name, or like `v_`) but is not known is a typo.
 fn looks_like_placeholder(word: &str) -> bool {
-    PLACEHOLDERS.iter().any(|p| word.starts_with(p) || p.starts_with(word)) && !PLACEHOLDERS.contains(&word)
+    let pins = scaffold::pin_words();
+    let known = PLACEHOLDERS.iter().any(|p| *p == word) || pins.iter().any(|p| p == word);
+    let resembles = PLACEHOLDERS.iter().any(|p| word.starts_with(p) || p.starts_with(word)) || word.starts_with("v_");
+    resembles && !known
 }
 
 /// A known placeholder that is still in a written file or path: the fill missed it.
 fn leftovers(root: &Path, plan: &Plan) -> Option<String> {
     for action in &plan.actions {
         let Action::File { path, text, mode } = action else { continue };
-        if let Some(w) = scaffold::braced_words(path).into_iter().chain(scaffold::braced_words(text)).find(|w| PLACEHOLDERS.contains(w)) {
+        let pins = scaffold::pin_words();
+        let left = |w: &&str| PLACEHOLDERS.contains(w) || pins.iter().any(|p| p == w);
+        if let Some(w) = scaffold::braced_words(path).into_iter().chain(scaffold::braced_words(text)).find(left) {
             return Some(format!("{{{w}}} was left unfilled in {path}"));
         }
         if *mode == Mode::Always && !root.join(path).is_file() {

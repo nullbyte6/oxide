@@ -408,7 +408,7 @@ const BUILTIN: &[Lang] = &[
         package: Some(Package { kind: PackageKind::Packages, suggest: "com.example.{pkg}" }),
         variants: &[v("sbt", "build.sbt, src/main/scala", &[
             File("build.sbt", SCALA_SBT),
-            File("project/build.properties", "sbt.version=1.10.7\n"),
+            File("project/build.properties", "sbt.version={v_sbt}\n"),
             File("src/main/scala/{package_path}/Main.scala", SCALA_MAIN),
             Dir("src/main/scala/{package_path}"),
             Dir("src/test/scala/{package_path}"),
@@ -710,6 +710,40 @@ pub fn parse_packages(text: &str, kind: PackageKind) -> Result<Vec<String>, Stri
     }
 }
 
+/// The versions the templates pin, as `(name, default, what it is)`. A template writes one as `{v_name}`, and
+/// `versions` in `config.lua` replaces the default, so no template needs editing when a version goes stale.
+pub const PINS: &[(&str, &str, &str)] = &[
+    ("java", "21", "Java release of Maven and Gradle projects, also the Kotlin JVM target"),
+    ("junit", "5.11.4", "JUnit Jupiter"),
+    ("surefire", "3.5.2", "Maven Surefire plugin"),
+    ("kotlin", "2.1.0", "Kotlin Gradle plugin"),
+    ("scala", "3.3.4", "Scala"),
+    ("sbt", "1.10.7", "sbt"),
+    ("munit", "1.0.3", "MUnit"),
+    ("clojure", "1.12.0", "Clojure"),
+    ("dotnet", "net8.0", "C# target framework"),
+    ("php", "8.1", "minimum PHP"),
+    ("python", "3.10", "minimum Python"),
+    ("dart", "3.0.0", "minimum Dart SDK"),
+    ("nim", "2.0.0", "minimum Nim"),
+    ("c_std", "11", "C standard"),
+    ("cpp_std", "20", "C++ standard"),
+    ("cmake", "3.16", "minimum CMake"),
+];
+
+/// Versions of `config.lua` that replace the defaults of `PINS`.
+static PIN_OVERRIDES: OnceLock<Vec<(String, String)>> = OnceLock::new();
+
+/// Makes the `versions` of `config.lua` count; call it once, before the first plan is made.
+pub fn set_pins(overrides: Vec<(String, String)>) {
+    let _ = PIN_OVERRIDES.set(overrides);
+}
+
+/// The version for pin `name`: the one from `config.lua`, else the default.
+fn pin(name: &str, default: &str) -> String {
+    PIN_OVERRIDES.get().and_then(|o| o.iter().find(|(k, _)| k == name)).map_or_else(|| default.to_string(), |(_, v)| v.clone())
+}
+
 /// Every placeholder a step may use, for `fill` and for checking the language table.
 pub const PLACEHOLDERS: &[&str] =
     &["name", "slug", "pkg", "user", "Pascal", "package_path", "PackagePascal", "package_json", "package"];
@@ -717,6 +751,13 @@ pub const PLACEHOLDERS: &[&str] =
 /// `s` with the placeholders of a project in `root` owned by `holder` filled in; `package` is what `{package}` is.
 pub fn fill(root: &Path, holder: &str, package: &str, s: &str) -> String {
     let name = project_name(root);
+    let mut s = s.to_string();
+    for (key, default, _) in PINS {
+        let token = format!("{{v_{key}}}");
+        if s.contains(&token) {
+            s = s.replace(&token, &pin(key, default));
+        }
+    }
     s.replace("{name}", &name)
         .replace("{pkg}", &ident(&name, '_', "app"))
         .replace("{slug}", &ident(&name, '-', "app"))
@@ -726,6 +767,11 @@ pub fn fill(root: &Path, holder: &str, package: &str, s: &str) -> String {
         .replace("{PackagePascal}", &pascal(package))
         .replace("{package_json}", &package.replace('\\', "\\\\"))
         .replace("{package}", package)
+}
+
+/// The names of the pins as placeholders (`v_java`).
+pub fn pin_words() -> Vec<String> {
+    PINS.iter().map(|(k, _, _)| format!("v_{k}")).collect()
 }
 
 /// The words that sit alone between braces in `text` (`{slug}`, not `{ a }` or `{:paths`).
@@ -806,7 +852,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "{slug}"
 version = "0.1.0"
-requires-python = ">=3.10"
+requires-python = ">={v_python}"
 dependencies = []
 
 [tool.setuptools.packages.find]
@@ -870,7 +916,7 @@ const JAVA_POM: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
   <packaging>jar</packaging>
 
   <properties>
-    <maven.compiler.release>21</maven.compiler.release>
+    <maven.compiler.release>{v_java}</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
   </properties>
 
@@ -878,7 +924,7 @@ const JAVA_POM: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
-      <version>5.11.4</version>
+      <version>{v_junit}</version>
       <scope>test</scope>
     </dependency>
   </dependencies>
@@ -888,7 +934,7 @@ const JAVA_POM: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
-        <version>3.5.2</version>
+        <version>{v_surefire}</version>
       </plugin>
     </plugins>
   </build>
@@ -905,13 +951,13 @@ repositories {
 }
 
 dependencies {
-    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+    testImplementation 'org.junit.jupiter:junit-jupiter:{v_junit}'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(21)
+        languageVersion = JavaLanguageVersion.of({v_java})
     }
 }
 
@@ -934,13 +980,13 @@ repositories {
 }
 
 dependencies {
-    testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
+    testImplementation("org.junit.jupiter:junit-jupiter:{v_junit}")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(21)
+        languageVersion = JavaLanguageVersion.of({v_java})
     }
 }
 
@@ -954,7 +1000,7 @@ tasks.test {
 "##;
 
 const KOTLIN_GRADLE: &str = r##"plugins {
-    kotlin("jvm") version "2.1.0"
+    kotlin("jvm") version "{v_kotlin}"
     application
 }
 
@@ -967,7 +1013,7 @@ dependencies {
 }
 
 kotlin {
-    jvmToolchain(21)
+    jvmToolchain({v_java})
 }
 
 application {
@@ -983,7 +1029,7 @@ const CSHARP_EXE: &str = r##"<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>{v_dotnet}</TargetFramework>
     <RootNamespace>{package}</RootNamespace>
     <AssemblyName>{slug}</AssemblyName>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -996,7 +1042,7 @@ const CSHARP_EXE: &str = r##"<Project Sdk="Microsoft.NET.Sdk">
 const CSHARP_LIB: &str = r##"<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>{v_dotnet}</TargetFramework>
     <RootNamespace>{package}</RootNamespace>
     <AssemblyName>{slug}</AssemblyName>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -1014,7 +1060,7 @@ const KOTLIN_MAIN: &str = "package {package}\n\nfun main() {\n    println(\"Hell
 
 const C_MAKEFILE: &str = "\
 CC      ?= cc
-CFLAGS  ?= -Wall -Wextra -std=c11 -O2
+CFLAGS  ?= -Wall -Wextra -std=c{v_c_std} -O2
 TARGET  := {slug}
 SRC     := $(wildcard src/*.c)
 OBJ     := $(SRC:src/%.c=build/%.o)
@@ -1038,10 +1084,10 @@ clean:
 
 const C_MAIN: &str = "#include <stdio.h>\n\nint main(void) {\n    puts(\"Hello, world!\");\n    return 0;\n}\n";
 
-const CPP_CMAKE: &str = r##"cmake_minimum_required(VERSION 3.16)
+const CPP_CMAKE: &str = r##"cmake_minimum_required(VERSION {v_cmake})
 project({slug} LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD {v_cpp_std})
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -1051,7 +1097,7 @@ target_include_directories({slug} PRIVATE include)
 
 const CPP_MAKEFILE: &str = "\
 CXX      ?= c++
-CXXFLAGS ?= -Wall -Wextra -std=c++20 -O2
+CXXFLAGS ?= -Wall -Wextra -std=c++{v_cpp_std} -O2
 TARGET   := {slug}
 SRC      := $(wildcard src/*.cpp)
 OBJ      := $(SRC:src/%.cpp=build/%.o)
@@ -1080,7 +1126,7 @@ const PHP_COMPOSER: &str = r##"{
     "description": "{slug}",
     "type": "project",
     "require": {
-        "php": ">=8.1"
+        "php": ">={v_php}"
     },
     "autoload": {
         "psr-4": {
@@ -1094,7 +1140,7 @@ const PHP_CLASS: &str = "<?php\n\ndeclare(strict_types=1);\n\nnamespace {package
 
 const RUBY_MAIN: &str = "# frozen_string_literal: true\n\nmodule {PackagePascal}\n  def self.greet\n    'Hello, world!'\n  end\nend\n";
 
-const DART_PUBSPEC: &str = "name: {package}\ndescription: {slug}\nversion: 0.1.0\n\nenvironment:\n  sdk: '>=3.0.0 <5.0.0'\n";
+const DART_PUBSPEC: &str = "name: {package}\ndescription: {slug}\nversion: 0.1.0\n\nenvironment:\n  sdk: '>={v_dart} <5.0.0'\n";
 
 const DART_MAIN: &str = "import 'package:{package}/{package}.dart';\n\nvoid main() {\n  print(greet());\n}\n";
 
@@ -1104,13 +1150,13 @@ const LUA_MAIN: &str = "-- Find the modules next to this file, wherever the scri
 
 const LUA_MODULE: &str = "local M = {}\n\nfunction M.greet()\n  return \"Hello, world!\"\nend\n\nreturn M\n";
 
-const SCALA_SBT: &str = r##"ThisBuild / scalaVersion := "3.3.4"
+const SCALA_SBT: &str = r##"ThisBuild / scalaVersion := "{v_scala}"
 ThisBuild / version      := "0.1.0"
 
 lazy val root = (project in file("."))
   .settings(
     name := "{slug}",
-    libraryDependencies += "org.scalameta" %% "munit" % "1.0.3" % Test
+    libraryDependencies += "org.scalameta" %% "munit" % "{v_munit}" % Test
   )
 "##;
 
@@ -1133,7 +1179,7 @@ license       = "MIT"
 srcDir        = "src"
 bin           = @["{package}"]
 
-requires "nim >= 2.0.0"
+requires "nim >= {v_nim}"
 "##;
 
 const NIM_MAIN: &str = "echo \"Hello, world!\"\n";
@@ -1142,6 +1188,6 @@ const PERL_MAIN: &str = "#!/usr/bin/env perl\nuse strict;\nuse warnings;\nuse Fi
 
 const PERL_MODULE: &str = "package {package};\n\nuse strict;\nuse warnings;\n\nour $VERSION = '0.01';\n\nsub greet {\n    return 'Hello, world!';\n}\n\n1;\n";
 
-const CLJ_DEPS: &str = "{:paths [\"src\"]\n :deps {org.clojure/clojure {:mvn/version \"1.12.0\"}}\n :aliases {:run {:main-opts [\"-m\" \"{package}\"]}\n           :test {:extra-paths [\"test\"]}}}\n";
+const CLJ_DEPS: &str = "{:paths [\"src\"]\n :deps {org.clojure/clojure {:mvn/version \"{v_clojure}\"}}\n :aliases {:run {:main-opts [\"-m\" \"{package}\"]}\n           :test {:extra-paths [\"test\"]}}}\n";
 
 const CLJ_MAIN: &str = "(ns {package})\n\n(defn -main [& _args]\n  (println \"Hello, world!\"))\n";
