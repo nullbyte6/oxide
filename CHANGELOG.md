@@ -6,6 +6,7 @@ All notable changes to Oxide are recorded here, newest version first.
 
 ### Added
 - Add an embedded terminal (`src/term.rs`): `T` opens a shell in the selected repository on a pseudo-terminal (`portable-pty`) parsed by a `vt100` screen and drawn full-screen with the shell's own colors, cursor and full-screen programs; `Ctrl+T` hides it while the shell keeps running, `Shift+PgUp` / `Shift+PgDn` scroll 5000 lines of history, and `exit` closes it and reloads the repository.
+- Add the groundwork for the new-project menu (not reachable from the keyboard yet): 25 languages with their variants in `src/scaffold.rs`, short `.gitignore` templates per language family in `src/ignore.rs`, 11 licenses in `src/license.rs` (full texts under `src/licenses/`), and a `Plan` that resolves a choice into the exact commands, directories and files, leaves out commands whose program is not installed and refuses anything but an empty repository.
 
 ### Changed
 - Update `t` to open the embedded terminal instead of suspending Oxide to run `$SHELL` outside it.

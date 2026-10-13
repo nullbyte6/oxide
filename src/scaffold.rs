@@ -2,8 +2,16 @@
 //!
 //! A language has one or more variants (build tools, usually); a variant is a list of steps: commands to
 //! run, directories to create and files to write. Anything a step says may use the placeholders
-//! `{name}` (the directory name), `{pkg}` (the name as a lowercase identifier: `my-app` -> `my_app`) and
-//! `{user}` (the Git user name as a lowercase identifier). Commands are split on spaces and run without a shell.
+//! `{name}` (the directory name as it is), `{slug}` (lowercase words joined by `-`: `My App` -> `my-app`),
+//! `{pkg}` (the same joined by `_`) and `{user}` (the Git user name as `{pkg}`). Names that go into a
+//! command, a file name or a build file use `{slug}` or `{pkg}`, so a directory with spaces still works.
+//! Commands are split on spaces and run without a shell.
+//!
+//! `Plan::build` turns a chosen variant into the exact list of actions, which the project menu shows before running them.
+
+use std::path::Path;
+
+use crate::{ignore, license::License};
 
 /// One thing a variant does inside the new project.
 pub enum Step {
@@ -87,7 +95,7 @@ pub const LANGS: &[Lang] = &[
         name: "Go",
         key: "go",
         variants: &[v("Module", "go mod init, cmd/ and internal/", &[
-            Run("go mod init {name}"),
+            Run("go mod init {slug}"),
             File("cmd/{pkg}/main.go", GO_MAIN),
             Dir("internal"),
         ])],
@@ -102,13 +110,13 @@ pub const LANGS: &[Lang] = &[
                 Dir("src/test/java/com/example"),
             ]),
             v("Gradle (Groovy)", "build.gradle, settings.gradle", &[
-                File("settings.gradle", "rootProject.name = '{name}'\n"),
+                File("settings.gradle", "rootProject.name = '{slug}'\n"),
                 File("build.gradle", JAVA_GRADLE),
                 File("src/main/java/com/example/Main.java", JAVA_MAIN),
                 Dir("src/test/java/com/example"),
             ]),
             v("Gradle (Kotlin DSL)", "build.gradle.kts, settings.gradle.kts", &[
-                File("settings.gradle.kts", "rootProject.name = \"{name}\"\n"),
+                File("settings.gradle.kts", "rootProject.name = \"{slug}\"\n"),
                 File("build.gradle.kts", JAVA_GRADLE_KTS),
                 File("src/main/java/com/example/Main.java", JAVA_MAIN),
                 Dir("src/test/java/com/example"),
@@ -119,7 +127,7 @@ pub const LANGS: &[Lang] = &[
         name: "Kotlin",
         key: "kotlin",
         variants: &[v("Gradle (Kotlin DSL)", "build.gradle.kts, src/main/kotlin", &[
-            File("settings.gradle.kts", "rootProject.name = \"{name}\"\n"),
+            File("settings.gradle.kts", "rootProject.name = \"{slug}\"\n"),
             File("build.gradle.kts", KOTLIN_GRADLE),
             File("src/main/kotlin/Main.kt", KOTLIN_MAIN),
             Dir("src/test/kotlin"),
@@ -154,8 +162,8 @@ pub const LANGS: &[Lang] = &[
         name: "C#",
         key: "csharp",
         variants: &[
-            v("Console", "dotnet new console", &[Run("dotnet new console --name {name} --output .")]),
-            v("Class library", "dotnet new classlib", &[Run("dotnet new classlib --name {name} --output .")]),
+            v("Console", "dotnet new console", &[Run("dotnet new console --name {slug} --output .")]),
+            v("Class library", "dotnet new classlib", &[Run("dotnet new classlib --name {slug} --output .")]),
         ],
     },
     Lang {
@@ -206,7 +214,7 @@ pub const LANGS: &[Lang] = &[
     Lang {
         name: "Haskell",
         key: "haskell",
-        variants: &[v("Cabal", "cabal init, app/", &[Run("cabal init --non-interactive --exe --package-name={name}")])],
+        variants: &[v("Cabal", "cabal init, app/", &[Run("cabal init --non-interactive --exe --package-name={slug}")])],
     },
     Lang {
         name: "Scala",
@@ -235,17 +243,17 @@ pub const LANGS: &[Lang] = &[
     Lang {
         name: "Shell",
         key: "shell",
-        variants: &[v("Script", "bin/{name}, lib/", &[
-            File("bin/{name}", SHELL_MAIN),
-            Run("chmod +x bin/{name}"),
+        variants: &[v("Script", "bin/{slug}, lib/", &[
+            File("bin/{slug}", SHELL_MAIN),
+            Run("chmod +x bin/{slug}"),
             Dir("lib"),
         ])],
     },
     Lang {
         name: "Nim",
         key: "nim",
-        variants: &[v("Nimble", "{name}.nimble, src/", &[
-            File("{name}.nimble", NIM_NIMBLE),
+        variants: &[v("Nimble", "{slug}.nimble, src/", &[
+            File("{slug}.nimble", NIM_NIMBLE),
             File("src/{pkg}.nim", NIM_MAIN),
             Dir("tests"),
         ])],
@@ -271,6 +279,126 @@ pub const LANGS: &[Lang] = &[
     },
 ];
 
+// ---- plan ----
+
+/// How a file is written when something may already be there.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Write {
+    /// Replace whatever is there.
+    Always,
+    /// Leave an existing file alone (tools like `uv init` or `dotnet new` write a README of their own).
+    IfMissing,
+    /// Add the lines that are not in the file yet (`cargo init` writes a `.gitignore` of its own).
+    Merge,
+}
+
+/// A step with its placeholders filled in.
+#[derive(Debug)]
+pub enum Action {
+    Run { program: String, args: Vec<String> },
+    File { path: String, text: String, mode: Write },
+}
+
+impl Action {
+    /// One line for the confirmation screen.
+    pub fn label(&self) -> String {
+        match self {
+            Action::Run { program, args } => format!("$ {program} {}", args.join(" ")).trim_end().to_string(),
+            Action::File { path, mode: Write::Merge, .. } => format!("write {path} (merged with the existing one)"),
+            Action::File { path, mode: Write::IfMissing, .. } => format!("write {path} (unless a tool made it)"),
+            Action::File { path, .. } => format!("write {path}"),
+        }
+    }
+}
+
+/// Everything setting a project up will do, in order, without having done any of it yet.
+#[derive(Debug)]
+pub struct Plan {
+    /// The project name: the name of its directory.
+    pub name: String,
+    pub actions: Vec<Action>,
+    /// Programs the variant needs that are not on `PATH`; their commands are left out of `actions`.
+    pub missing: Vec<String>,
+}
+
+impl Plan {
+    /// The plan for `root`: the variant's steps, then a `.gitignore` for the language, a README
+    /// and the license (when one was chosen) with `holder` and `year` in its copyright line.
+    pub fn build(root: &Path, lang: &Lang, variant: &Variant, license: Option<&License>, holder: &str, year: i64) -> Plan {
+        let name = project_name(root);
+        let (pkg, slug, user) = (ident(&name, '_', "app"), ident(&name, '-', "app"), ident(holder, '_', "app"));
+        let fill = |s: &str| s.replace("{name}", &name).replace("{pkg}", &pkg).replace("{slug}", &slug).replace("{user}", &user);
+
+        let mut actions = Vec::new();
+        let mut missing: Vec<String> = Vec::new();
+        for step in variant.steps {
+            match step {
+                Run(line) => {
+                    let line = fill(line);
+                    let mut words = line.split_whitespace().map(str::to_string);
+                    let Some(program) = words.next() else { continue };
+                    if on_path(&program) {
+                        actions.push(Action::Run { program, args: words.collect() });
+                    } else if !missing.contains(&program) {
+                        missing.push(program);
+                    }
+                }
+                Dir(path) => {
+                    // An empty directory would not exist in Git, so it gets a marker file, unless a file lands in it.
+                    let path = fill(path);
+                    let prefix = format!("{path}/");
+                    if !variant.steps.iter().any(|s| matches!(s, File(f, _) if fill(f).starts_with(&prefix))) {
+                        actions.push(Action::File { path: format!("{path}/.gitkeep"), text: String::new(), mode: Write::IfMissing });
+                    }
+                }
+                File(path, text) => actions.push(Action::File { path: fill(path), text: fill(text), mode: Write::Always }),
+            }
+        }
+        actions.push(Action::File { path: ".gitignore".to_string(), text: ignore::gitignore(lang.key), mode: Write::Merge });
+        actions.push(Action::File { path: "README.md".to_string(), text: format!("# {name}\n"), mode: Write::IfMissing });
+        if let Some(l) = license {
+            actions.push(Action::File { path: "LICENSE".to_string(), text: l.text(holder, year), mode: Write::Always });
+        }
+        Plan { name, actions, missing }
+    }
+}
+
+/// A repository can be set up when nothing is in it but Git's own `.git` (a folder, or a file in worktrees).
+pub fn is_empty(root: &Path) -> bool {
+    std::fs::read_dir(root).is_ok_and(|mut entries| entries.all(|e| e.is_ok_and(|e| e.file_name() == ".git")))
+}
+
+/// The name of the project in `root`: the name of its directory.
+fn project_name(root: &Path) -> String {
+    root.file_name().map_or_else(|| "project".to_string(), |n| n.to_string_lossy().into_owned())
+}
+
+/// `s` as a lowercase identifier with `sep` between words (`My App` -> `my_app`), or `fallback` when nothing is left of it.
+fn ident(s: &str, sep: char, fallback: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        if c.is_alphanumeric() {
+            out.extend(c.to_lowercase());
+        } else if !out.is_empty() && !out.ends_with(sep) {
+            out.push(sep);
+        }
+    }
+    let out = out.trim_end_matches(sep);
+    match out.chars().next() {
+        None => fallback.to_string(),
+        Some(c) if c.is_ascii_digit() => format!("p_{out}"), // identifiers cannot start with a digit
+        Some(_) => out.to_string(),
+    }
+}
+
+/// `program` is an executable file in one of the `PATH` directories.
+fn on_path(program: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths).any(|dir| std::fs::metadata(dir.join(program)).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
+    })
+}
+
 // ---- file contents ----
 
 const PY_PROJECT: &str = r##"[build-system]
@@ -278,7 +406,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "{name}"
+name = "{slug}"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = []
@@ -339,7 +467,7 @@ const JAVA_POM: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
   <modelVersion>4.0.0</modelVersion>
 
   <groupId>com.example</groupId>
-  <artifactId>{name}</artifactId>
+  <artifactId>{slug}</artifactId>
   <version>0.1.0-SNAPSHOT</version>
   <packaging>jar</packaging>
 
@@ -458,7 +586,7 @@ const KOTLIN_MAIN: &str = "fun main() {\n    println(\"Hello, world!\")\n}\n";
 const C_MAKEFILE: &str = "\
 CC      ?= cc
 CFLAGS  ?= -Wall -Wextra -std=c11 -O2
-TARGET  := {name}
+TARGET  := {slug}
 SRC     := $(wildcard src/*.c)
 OBJ     := $(SRC:src/%.c=build/%.o)
 
@@ -482,20 +610,20 @@ clean:
 const C_MAIN: &str = "#include <stdio.h>\n\nint main(void) {\n    puts(\"Hello, world!\");\n    return 0;\n}\n";
 
 const CPP_CMAKE: &str = r##"cmake_minimum_required(VERSION 3.16)
-project({name} LANGUAGES CXX)
+project({slug} LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-add_executable({name} src/main.cpp)
-target_include_directories({name} PRIVATE include)
+add_executable({slug} src/main.cpp)
+target_include_directories({slug} PRIVATE include)
 "##;
 
 const CPP_MAKEFILE: &str = "\
 CXX      ?= c++
 CXXFLAGS ?= -Wall -Wextra -std=c++20 -O2
-TARGET   := {name}
+TARGET   := {slug}
 SRC      := $(wildcard src/*.cpp)
 OBJ      := $(SRC:src/%.cpp=build/%.o)
 
@@ -529,7 +657,7 @@ ThisBuild / version      := "0.1.0"
 
 lazy val root = (project in file("."))
   .settings(
-    name := "{name}",
+    name := "{slug}",
     libraryDependencies += "org.scalameta" %% "munit" % "1.0.3" % Test
   )
 "##;
@@ -546,7 +674,7 @@ const SHELL_MAIN: &str = "#!/usr/bin/env bash\nset -euo pipefail\n\necho \"Hello
 
 const NIM_NIMBLE: &str = r##"version       = "0.1.0"
 author        = "{user}"
-description   = "{name}"
+description   = "{slug}"
 license       = "MIT"
 srcDir        = "src"
 bin           = @["{pkg}"]
