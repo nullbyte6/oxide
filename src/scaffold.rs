@@ -362,8 +362,12 @@ const BUILTIN: &[Lang] = &[
         name: "Lua",
         key: "lua",
         ignore: "",
-        package: None,
-        variants: &[v("Plain", "src/main.lua, tests/", &[File("src/main.lua", LUA_MAIN), Dir("tests")])],
+        package: Some(Package { kind: PackageKind::Snake, suggest: "{pkg}" }),
+        variants: &[v("Plain", "src/main.lua, src/<name>.lua, tests/", &[
+            File("src/main.lua", LUA_MAIN),
+            File("src/{package}.lua", LUA_MODULE),
+            Dir("tests"),
+        ])],
     },
     Lang {
         name: "Zig",
@@ -1063,7 +1067,9 @@ const DART_MAIN: &str = "import 'package:{package}/{package}.dart';\n\nvoid main
 
 const DART_LIB: &str = "String greet() => 'Hello, world!';\n";
 
-const LUA_MAIN: &str = "print(\"Hello, world!\")\n";
+const LUA_MAIN: &str = "-- Find the modules next to this file, wherever the script is run from.\nlocal dir = arg and arg[0] and arg[0]:match(\"^(.*)/[^/]*$\") or \".\"\npackage.path = dir .. \"/?.lua;\" .. package.path\n\nlocal {package} = require(\"{package}\")\n\nprint({package}.greet())\n";
+
+const LUA_MODULE: &str = "local M = {}\n\nfunction M.greet()\n  return \"Hello, world!\"\nend\n\nreturn M\n";
 
 const SCALA_SBT: &str = r##"ThisBuild / scalaVersion := "3.3.4"
 ThisBuild / version      := "0.1.0"
