@@ -16,7 +16,7 @@ use std::{
 
 use crate::{
     git,
-    scaffold::{Lang, Package, PackageKind, Step, Variant},
+    scaffold::{Lang, PINS, Package, PackageKind, Step, Variant},
 };
 
 /// How many directory levels below a root are searched for repositories.
@@ -51,6 +51,8 @@ pub struct Config {
     pub ignores: Vec<String>,
     /// Languages added to the new-project menu (`languages`).
     pub languages: Vec<Lang>,
+    /// Versions that replace the defaults of `scaffold::PINS` (`versions`), as `(name, version)`.
+    pub versions: Vec<(String, String)>,
     /// False for the automatic whole-machine roots: each mounted drive is its own root, so a scan
     /// never steps onto another filesystem. Explicit roots (CLI or config) may cross mount points.
     pub cross_devices: bool,
@@ -176,6 +178,36 @@ fn read_variant(t: &Table, name: String) -> Result<Variant, String> {
     Ok(Variant { name: keep(name), note: keep(note), steps: steps.leak(), check: check.leak() })
 }
 
+/// The `versions` option: a table of version strings keyed by pin name (`java = "17"`, see `scaffold::PINS`).
+/// An integer is accepted (`java = 17`); other numbers are not, since `3.10` would become `3.1`. Entries that do
+/// not fit are skipped and the first problem is returned so it can be logged.
+fn read_versions(conf: &Table) -> (Vec<(String, String)>, Option<String>) {
+    let table = match conf.get::<Value>("versions") {
+        Ok(Value::Nil) => return (Vec::new(), None),
+        Ok(Value::Table(t)) => t,
+        _ => return (Vec::new(), Some("versions: expected a table such as { java = \"17\" }".to_string())),
+    };
+    let (mut out, mut problem) = (Vec::new(), None);
+    for pair in table.pairs::<String, Value>().flatten() {
+        let (key, value) = pair;
+        let version = match value {
+            Value::String(s) => s.to_string_lossy(),
+            Value::Integer(n) => n.to_string(),
+            _ => {
+                problem = problem.or(Some(format!("versions.{key}: write the version as a string, e.g. \"3.10\"")));
+                continue;
+            }
+        };
+        if PINS.iter().any(|(k, _, _)| *k == key) {
+            out.push((key, version));
+        } else {
+            let known: Vec<&str> = PINS.iter().map(|(k, _, _)| *k).collect();
+            problem = problem.or(Some(format!("versions.{key}: unknown; known are {}", known.join(", "))));
+        }
+    }
+    (out, problem)
+}
+
 /// The `languages` option: a list of tables, each with `name`, optionally `ignore` (`.gitignore` lines),
 /// `key` (a built-in `.gitignore` template such as `"rust"`), `package` (a suggested package name such as
 /// `"com.example.{pkg}"`; the menu then asks for packages and steps can use `{package}` and `{package_path}`) and either `variants` (a list of tables with
@@ -243,6 +275,7 @@ impl Config {
         let mut depth = DEFAULT_DEPTH;
         let (mut pins, mut ignores) = (Vec::new(), Vec::new());
         let mut languages = Vec::new();
+        let mut versions = Vec::new();
         let mut hints = true;
         let mut logs = true;
         let mut clone_dir = home();
@@ -263,6 +296,9 @@ impl Config {
                     ignores = strings(&conf, "ignore");
                     let (found, problem) = read_languages(&conf);
                     languages = found;
+                    error = error.or(problem);
+                    let (found, problem) = read_versions(&conf);
+                    versions = found;
                     error = error.or(problem);
                     match conf.get::<Value>("depth") {
                         Ok(Value::Nil) => {}
@@ -312,6 +348,6 @@ impl Config {
         owners.sort();
         owners.dedup();
 
-        Config { error, roots, owners, depth, color, hints, logs, emails, autofetch, ci, clone_dir, pins, ignores, languages, cross_devices: explicit }
+        Config { error, roots, owners, depth, color, hints, logs, emails, autofetch, ci, clone_dir, pins, ignores, languages, versions, cross_devices: explicit }
     }
 }

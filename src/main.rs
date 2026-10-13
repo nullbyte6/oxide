@@ -88,6 +88,7 @@ fn main() -> ExitCode {
     }
     let cfg = Config::load(paths);
     scaffold::register(cfg.languages.clone());
+    scaffold::set_pins(cfg.versions.clone());
 
     if check {
         if let Some(e) = &cfg.error {
