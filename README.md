@@ -26,6 +26,7 @@ screen, and lets you stage, commit, push, pull, fetch and merge without leaving 
 - **Commit log and branches**: browse a repository's history and open any commit's diff; list, switch, create, merge and delete branches, with merged and stale ones flagged.
 - **`git init` anywhere**: initialise a repository in any folder, existing or new, and see it in the list right away.
 - **GitHub** (needs the [`gh`](https://cli.github.com) CLI, logged in): browse a repository's issues and pull requests, read them, diff and check out pull requests, find repositories (yours or anyone's) and clone them, and open things in your browser.
+- **Files and editing**: `Ctrl+P` finds any file of the repository by name (fuzzy, changed files first) and opens it in a read-only viewer with line numbers, highlighting, search and go to line; `e` opens the file in your editor at the cursor line (`Ctrl+E` on the highlighted changed file, `e` in the diff), and Oxide comes back with everything reloaded when the editor exits.
 - **Jump out**: open the selected file or repository in yazi or the file manager.
 - **New project**: `K` in an empty repository opens a menu to set it up for 25 languages (Rust, Python, JavaScript, TypeScript, Go, Java, Kotlin, C, C++, C#, PHP, Ruby, Swift, Dart, Lua, Zig, Elixir, Haskell, Scala, R, Julia, Shell, Nim, Perl, Clojure): pick the language (type to filter), the build tool where there is a choice (Maven by default for Java), a license (11 offered, holder and year filled in) and review the exact commands and files before anything is done; the setup then runs in the background, with an optional first commit. *Other / manual…* opens the embedded terminal instead.
 - **Embedded terminal**: `t` / `T` opens a shell inside Oxide, in the selected repository, on a pseudo-terminal with colors, full-screen programs and scrollback; `Ctrl+T` hides it and the shell keeps running.
@@ -108,6 +109,8 @@ oxide [OPTIONS] [PATH...]
 | `i` / `y` | GitHub issues / pull requests of the selected repository (see below) |
 | `B` | Open the selected repository's GitHub page in the browser |
 | `S` | Find GitHub repositories and clone them (see below) |
+| `Ctrl+P` | Find a file of the selected repository by name and read it (see *File finder and viewer* below) |
+| `Ctrl+E` | Edit the highlighted changed file in your editor, at its first line (`editor` in `config.lua`, else `$VISUAL` / `$EDITOR`, else `vi`) |
 | `e` | Open [yazi](https://yazi-rs.github.io) in the repository, with the highlighted file revealed when the changes list is focused. Open files from yazi with your usual opener (e.g. nvim). Without yazi installed it falls back to `$VISUAL` / `$EDITOR` |
 | `K` | New project in an empty repository: language, build tool, license, then a plan to confirm (`c` toggles a first commit, `Esc` goes back a page) |
 | `X` | Undo the last project setup of the selected repository (see "New project") |
@@ -440,6 +443,34 @@ placeholder that nothing fills in, or whose suggested package its own page would
 status is 1 when anything failed, and the folders are then kept for a look. Some checks download dependencies,
 so they need the network. A language from `config.lua` can add a `check` list to its variants to take part.
 
+### File finder and viewer
+
+`Ctrl+P` lists the files of the selected repository (tracked ones and untracked ones that are not ignored),
+changed files first. Type a few letters of the path: matches inside the file name rank above matches spread
+over folders, and `●` marks files with changes. `Enter` opens the file in the viewer, `Ctrl+E` in the editor,
+`Esc` clears the query and then closes the finder.
+
+The viewer is read-only: line numbers, the diff viewer's per-language highlighting, a cursor line (`▸`) and
+files up to 2 MB or 50 000 lines (it says when it cuts one off; binary files are refused).
+
+| Key | Action |
+| --- | --- |
+| `↑` `↓` / `j` `k`, `Space` / `b` | Move the cursor a line / a page |
+| `g` / `G` | Top / bottom |
+| `←` `→` / `h` `l`, `0` | Pan long lines, back to the left edge |
+| `/` | Search (case does not matter); lines that hold it are marked `•`, and the title counts them |
+| `n` / `N` | Next / previous match, wrapping around |
+| `:` | Go to a line number |
+| `e` | Open the file in the editor at the cursor line |
+| `r` | Read the file again |
+| `Esc`, `q` | Close (back to the finder when it came from there) |
+
+The editor runs in the whole terminal, and Oxide returns when it exits. It is `editor` in `config.lua` if
+set, else `$VISUAL`, else `$EDITOR`, else `vi`. The line is passed the way the editor expects it: `+12 file`
+for vi, vim, nvim, nano, micro, emacs, kak and gedit; `file:12` for helix, zed and sublime; `-g file:12` for
+VS Code and Cursor. For any other editor use `{file}` and `{line}` in `editor`, for example
+`editor = "kate -l {line} {file}"`. A graphical editor that returns at once is fine; `r` re-reads the file.
+
 ### Diff viewer
 
 `d` opens the highlighted file's diff full screen: untracked files are shown as entirely added, and a file
@@ -458,6 +489,7 @@ differs: bold keywords and dim italic comments.
 | `←` `→` / `h` `l`, `0` | Pan long lines, back to the left edge |
 | `Tab` | Staged / unstaged version, when the file has both |
 | `s` | Stage the hunk at the top of the screen (unstaged version), or unstage it (staged version) |
+| `e` | Edit the file in your editor, at the first line shown (working-tree diffs only) |
 | `Esc`, `q`, `d` | Close |
 
 The hunk `s` acts on is marked `▸` and counted in the title (`hunk 2/5`); `[` `]` move between hunks. The
@@ -541,6 +573,10 @@ ci = true
 
 -- folder that GitHub repositories are cloned into by default (home directory when unset)
 clone_dir = "~/dev"
+
+-- the editor `e` and `Ctrl+E` start, with its arguments; {file} and {line} are replaced if you write them.
+-- Default: $VISUAL, then $EDITOR, then vi
+editor = "nvim"
 
 -- repositories listed first / hidden: a directory name, or a path (a value with a "/" or a leading "~"
 -- also covers every repository below it)
@@ -630,6 +666,7 @@ run in batch mode unless you set `core.sshCommand`, `GIT_SSH_COMMAND` or `GIT_SS
 | `src/ui.rs` | Ratatui rendering |
 | `src/github.rs` | GitHub through the `gh` CLI: remote parsing, issue and pull request lists |
 | `src/git.rs` | `git` CLI wrapper: status parsing, operations and diffs |
+| `src/code.rs` | Reads and highlights a source file for the code viewer |
 | `src/diff.rs` | Parses `git diff` output into rows for the diff viewer |
 | `src/syntax.rs` | Dependency-free syntax highlighter used by the diff viewer |
 | `src/langs.rs` | Built-in language table (extensions, colours) and the per-repository language count |

@@ -30,6 +30,7 @@ pub const ENTRIES: &[Entry] = &[
     e("Commit staged changes", "c", 'c'),
     e("Show the diff of the highlighted file", "d", 'd'),
     c("Find a file by name and read it", "Ctrl+P", 'p'),
+    c("Edit the highlighted changed file in your editor", "Ctrl+E", 'e'),
     e("Show the commit log", "v", 'v'),
     e("Amend the last commit", "E", 'E'),
     e("Reflog: see and undo what happened to HEAD", "O", 'O'),

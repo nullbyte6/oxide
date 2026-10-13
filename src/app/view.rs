@@ -185,6 +185,13 @@ impl App {
             KeyCode::Char('p') if ctrl => step(v, -1),
             KeyCode::PageDown => step(v, 10),
             KeyCode::PageUp => step(v, -10),
+            KeyCode::Char('e') if ctrl => {
+                let picked = v.state.selected().and_then(|i| v.shown.get(i)).and_then(|(k, _)| v.files.as_ref()?.get(*k)).cloned();
+                let repo = v.repo.clone();
+                if let Some(file) = picked {
+                    self.start_edit(repo, file, 1);
+                }
+            }
             KeyCode::Enter => {
                 let picked = v.state.selected().and_then(|i| v.shown.get(i)).and_then(|(k, _)| v.files.as_ref()?.get(*k)).cloned();
                 let repo = v.repo.clone();
@@ -242,10 +249,12 @@ impl App {
                 v.cut = loaded.cut;
                 v.error = None;
                 if let Some(line) = v.goto.take() {
-                    v.cursor = line.min(v.len().saturating_sub(1));
-                    v.center();
+                    v.cursor = line;
                 }
                 v.cursor = v.cursor.min(v.len().saturating_sub(1));
+                if v.cursor < v.scroll || v.cursor >= v.scroll + v.height.max(1) {
+                    v.center();
+                }
                 if !v.query.is_empty() {
                     v.search(&v.query.clone());
                 }
@@ -309,6 +318,14 @@ impl App {
             KeyCode::Right | KeyCode::Char('l') => v.hscroll += 8,
             KeyCode::Left | KeyCode::Char('h') => v.hscroll = v.hscroll.saturating_sub(8),
             KeyCode::Char('0') => v.hscroll = 0,
+            KeyCode::Char('e') => {
+                let (repo, file, line) = (v.repo.clone(), v.file.clone(), v.cursor + 1);
+                self.start_edit(repo, file, line);
+            }
+            KeyCode::Char('r') => {
+                let repo = v.repo.clone();
+                self.reload_code(&repo);
+            }
             KeyCode::Char('/') => v.prompt = Some((Prompt::Find, v.query.clone())),
             KeyCode::Char(':') => v.prompt = Some((Prompt::Goto, String::new())),
             KeyCode::Char('n') => {
@@ -319,6 +336,62 @@ impl App {
             }
             _ => {}
         }
+    }
+}
+
+impl App {
+    /// The editor command line: `editor` of `config.lua`, else `$VISUAL`, `$EDITOR`, else `vi`.
+    fn editor_line(&self) -> String {
+        if !self.cfg.editor.is_empty() {
+            return self.cfg.editor.clone();
+        }
+        ["VISUAL", "EDITOR"].iter().find_map(|v| std::env::var(v).ok().filter(|s| !s.trim().is_empty())).unwrap_or_else(|| "vi".to_string())
+    }
+
+    /// Opens `file` of `repo` in the editor at `line`; the dashboard comes back when the editor exits.
+    pub(super) fn start_edit(&mut self, repo: PathBuf, file: String, line: usize) {
+        if !repo.join(&file).is_file() {
+            return self.log(Level::Warn, format!("{file} does not exist in the working tree"));
+        }
+        self.launch = Some(Launch::Edit { repo, file, line, editor: self.editor_line() });
+    }
+
+    /// `Ctrl+E` on the dashboard: edits the file highlighted in the changes list.
+    pub(super) fn edit_highlighted(&mut self) {
+        let picked = match (self.focus, self.selected()) {
+            (Focus::Files, Some(r)) => self.file_state.selected().and_then(|i| r.files.get(i)).map(|f| (r.path.clone(), f.path.clone())),
+            _ => None,
+        };
+        match picked {
+            Some((repo, file)) => self.start_edit(repo, file, 1),
+            None => self.log(Level::Info, "Tab to the changes list and highlight a file first, or find one with Ctrl+P"),
+        }
+    }
+
+    /// `e` in the diff viewer: edits the file at the first line shown (its line number in the new version).
+    pub(super) fn edit_from_diff(&mut self) {
+        let Some(v) = self.diff.as_ref() else { return };
+        if !v.stageable() && v.kind != DiffKind::Untracked {
+            return self.log(Level::Warn, "only the diff of a file in the working tree opens in the editor");
+        }
+        let line = v.diff.as_ref().and_then(|d| {
+            let numbered = |r: &diff::Row| match r {
+                diff::Row::Line { new: Some(n), .. } => Some(*n as usize),
+                _ => None,
+            };
+            d.rows[v.scroll.min(d.rows.len())..].iter().find_map(numbered).or_else(|| d.rows[..v.scroll.min(d.rows.len())].iter().rev().find_map(numbered))
+        });
+        let (repo, file) = (v.repo.clone(), v.file.clone());
+        self.start_edit(repo, file, line.unwrap_or(1));
+    }
+
+    /// Reads the open file again (after the editor closed, or on `r`), keeping the cursor line.
+    pub(super) fn reload_code(&mut self, repo: &Path) {
+        self.diff_id += 1;
+        let Some(v) = self.code.as_mut().filter(|v| v.repo == repo) else { return };
+        v.id = self.diff_id;
+        v.goto = Some(v.cursor);
+        worker::spawn_code(v.repo.clone(), v.file.clone(), v.id, self.tx.clone());
     }
 }
 

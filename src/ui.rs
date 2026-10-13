@@ -862,13 +862,13 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         if let Some((kind, text)) = &v.prompt {
             f.render_widget(Paragraph::new(view::code_prompt(*kind, text)), area);
         } else {
-            let hints = [("↑↓", "line"), ("Space", "page"), ("/ n N", "find"), (":", "go to line"), ("← →", "pan"), ("g G", "top/end"), ("Esc", "close")];
+            let hints = [("↑↓", "line"), ("Space", "page"), ("/ n N", "find"), (":", "go to line"), ("e", "edit"), ("r", "reload"), ("g G", "top/end"), ("Esc", "close")];
             f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
         }
         return;
     }
     if app.mode == Mode::Picker {
-        let hints = [("type", "to filter"), ("↑↓", "move"), ("Enter", "view the file"), ("Esc", "clear/close")];
+        let hints = [("type", "to filter"), ("↑↓", "move"), ("Enter", "view the file"), ("Ctrl+E", "edit"), ("Esc", "clear/close")];
         f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
         return;
     }
@@ -881,6 +881,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         if both {
             hints.push(("Tab", "staged/unstaged"));
         }
+        hints.push(("e", "edit"));
         hints.push(("Esc", "close"));
         let mut spans = Vec::new();
         for (key, what) in hints {
@@ -1640,6 +1641,7 @@ fn draw_help(f: &mut Frame) {
         ("O", "reflog: where HEAD has been; u undoes an entry, Enter moves the branch there"),
         ("D", "DELETE the repository from disk (asks you to type its name)"),
         ("i y B S", "GitHub: issues / pull requests / repo in browser / find & clone"),
+        ("Ctrl+E", "edit the highlighted changed file in your editor (`e` in the viewer and the diff opens it at the line)"),
         ("e / o", "yazi on the file or repository / file manager"),
         ("t / T", "embedded terminal in the repository, or in the highlighted file's folder from the changes list (Ctrl+T hides it)"),
         ("K / X", "new project in an empty repository: language, build tool, license / undo that setup"),

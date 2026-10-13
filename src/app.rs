@@ -118,18 +118,23 @@ pub enum Launch {
     /// The yazi file manager inside `repo`, with `target` revealed. Files are then opened from yazi,
     /// with whatever program its rules choose (e.g. nvim). Without yazi, `$VISUAL` / `$EDITOR` opens `target`.
     Browse { repo: PathBuf, target: PathBuf },
+    /// The editor `editor` (a command line, see `App::editor_line`) on `file` of `repo`, at `line` (1-based).
+    Edit { repo: PathBuf, file: String, line: usize, editor: String },
 }
 
 impl Launch {
     pub fn repo(&self) -> &Path {
         match self {
-            Launch::Browse { repo, .. } => repo,
+            Launch::Browse { repo, .. } | Launch::Edit { repo, .. } => repo,
         }
     }
 
     /// Runs the program in the foreground and waits for it.
     pub fn run(&self) -> Result<(), String> {
-        let Launch::Browse { repo, target } = self;
+        let (repo, target) = match self {
+            Launch::Browse { repo, target } => (repo, target),
+            Launch::Edit { repo, file, line, editor } => return edit(repo, &repo.join(file), *line, editor),
+        };
         match Command::new("yazi").arg(target).current_dir(repo).status() {
             Ok(_) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -138,6 +143,34 @@ impl Launch {
             Err(e) => Err(format!("cannot run yazi: {e}")),
         }
     }
+}
+
+/// Runs the editor command line `spec` on `path`, opened at `line`, and waits for it. `{file}` and `{line}` in the
+/// arguments are replaced; without them the arguments the editor needs for a line are added from its name
+/// (`+12 file` for vi, nano, emacs ...; `file:12` for helix, zed, sublime; `-g file:12` for VS Code).
+fn edit(repo: &Path, path: &Path, line: usize, spec: &str) -> Result<(), String> {
+    let mut parts = spec.split_whitespace().map(str::to_string);
+    let program = parts.next().unwrap_or_else(|| "vi".to_string());
+    let mut args: Vec<String> = parts.collect();
+    let file = path.display().to_string();
+    if args.iter().any(|a| a.contains("{file}")) {
+        args = args.iter().map(|a| a.replace("{file}", &file).replace("{line}", &line.to_string())).collect();
+    } else {
+        match Path::new(&program).file_name().and_then(|n| n.to_str()).unwrap_or(&program) {
+            "vi" | "vim" | "nvim" | "view" | "nano" | "pico" | "micro" | "emacs" | "emacsclient" | "kak" | "gedit" | "joe" => {
+                args.extend([format!("+{line}"), file]);
+            }
+            "hx" | "helix" | "zed" | "subl" | "sublime_text" => args.push(format!("{file}:{line}")),
+            "code" | "codium" | "code-insiders" | "cursor" => args.extend(["-g".to_string(), format!("{file}:{line}")]),
+            _ => args.push(file),
+        }
+    }
+    Command::new(&program)
+        .args(&args)
+        .current_dir(repo)
+        .status()
+        .map(|_| ())
+        .map_err(|e| format!("cannot run {program}: {e}"))
 }
 
 /// Fallback when yazi is missing: `$VISUAL` / `$EDITOR` (default `vi`) on `target`.
@@ -1396,6 +1429,7 @@ impl App {
             KeyCode::Char('Z') => self.op_selected(Op::StashPop),
             KeyCode::Char('L') => self.pull_visible(),
             KeyCode::Char('U') => self.push_visible(),
+            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => self.edit_highlighted(),
             KeyCode::Char('e') => self.open_browser(),
             KeyCode::Char('t' | 'T') => self.open_terminal(),
             KeyCode::Char('K') => self.open_project(),
@@ -2412,6 +2446,7 @@ impl App {
                     worker::spawn_diff(v.repo.clone(), v.file.clone(), v.kind, v.id, self.tx.clone());
                 }
             }
+            KeyCode::Char('e') => self.edit_from_diff(),
             // Stage the hunk at the top of the screen (unstaged view), or unstage it (staged view).
             KeyCode::Char('s') => {
                 if !v.stageable() {
@@ -2995,6 +3030,8 @@ impl App {
             self.log(Level::Error, e);
         }
         self.reload(repo.to_path_buf()); // the program may have changed the working tree
+        self.reload_code(repo);
+        self.reload_diff(repo);
     }
 
     /// Reloads only the selected repository.

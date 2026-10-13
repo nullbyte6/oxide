@@ -4,7 +4,7 @@
 //! `~/.config/oxide/config.lua`) is a Lua script. Oxide runs it and reads the table it returns, or, when it
 //! returns nothing, the global variables it sets. Keys: `root`, `owner`, `email`, `pin` and `ignore` (a string
 //! or a list of strings), `depth` (number), `color`, `hints`, `logs` and `ci` (booleans), `autofetch` (`false`,
-//! or an interval such as `"10m"`; a bare number counts minutes) and `clone_dir` (string). `pin` / `ignore` take
+//! or an interval such as `"10m"`; a bare number counts minutes) `clone_dir` and `editor` (strings; see `App::editor_line`). `pin` / `ignore` take
 //! a repository directory name, or a path when the value contains `/` or starts with `~`. `languages` is a list
 //! of tables that add languages to the new-project menu (`K`) or replace a built-in one; see `read_languages`.
 
@@ -45,6 +45,8 @@ pub struct Config {
     pub ci: bool,
     /// Folder that GitHub repositories are cloned into by default (`clone_dir`); the home directory otherwise.
     pub clone_dir: PathBuf,
+    /// The editor `Ctrl+E` and `e` start, with its arguments (`editor`); `$VISUAL`, `$EDITOR` or `vi` when empty.
+    pub editor: String,
     /// Repositories always listed first (directory names or paths from `pin` entries).
     pub pins: Vec<String>,
     /// Repositories hidden from the list (directory names or paths from `ignore` entries).
@@ -282,6 +284,7 @@ impl Config {
         let mut hints = true;
         let mut logs = true;
         let mut clone_dir = home();
+        let mut editor = String::new();
         let mut emails = Vec::new();
         let mut autofetch = 0;
         let mut ci = true;
@@ -318,6 +321,11 @@ impl Config {
                     if let Ok(dir) = conf.get::<String>("clone_dir") {
                         clone_dir = expand(&dir);
                     }
+                    match conf.get::<Value>("editor") {
+                        Ok(Value::Nil) => {}
+                        Ok(Value::String(v)) if !v.to_string_lossy().trim().is_empty() => editor = v.to_string_lossy().trim().to_string(),
+                        _ => error = Some("editor: expected a command such as \"nvim\" or \"code -g {file}:{line}\"".to_string()),
+                    }
                     match conf.get::<Value>("autofetch") {
                         Ok(Value::Boolean(false)) => autofetch = 0,
                         Ok(Value::Integer(n)) => autofetch = u64::try_from(n).unwrap_or(0) * 60,
@@ -351,6 +359,6 @@ impl Config {
         owners.sort();
         owners.dedup();
 
-        Config { error, roots, owners, depth, color, hints, logs, emails, autofetch, ci, clone_dir, pins, ignores, languages, versions, cross_devices: explicit }
+        Config { error, roots, owners, depth, color, hints, logs, emails, autofetch, ci, clone_dir, editor, pins, ignores, languages, versions, cross_devices: explicit }
     }
 }
