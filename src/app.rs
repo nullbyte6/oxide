@@ -216,6 +216,10 @@ pub struct DiffView {
     pub both: bool,
     /// Line mode (`v`), when some lines of a hunk are being picked.
     pub pick: Option<LinePick>,
+    /// The side-by-side layout (`m`) is shown, with its first visible row and its rows (built when needed).
+    pub split: bool,
+    pub sscroll: usize,
+    pub rows2: Option<diff::Split>,
     /// The mode to return to when the viewer closes (the dashboard, or the commit log).
     back: Mode,
     id: u64,
@@ -226,6 +230,47 @@ impl DiffView {
     pub fn hunk(&self) -> Option<usize> {
         let hunks = &self.diff.as_ref()?.hunks;
         (!hunks.is_empty()).then(|| hunks.iter().rposition(|&h| h <= self.scroll).unwrap_or(0))
+    }
+
+    /// Builds the side-by-side rows of the loaded diff when that layout is shown and they are missing.
+    pub fn ensure_split(&mut self) {
+        if self.split && self.rows2.is_none() {
+            self.rows2 = self.diff.as_ref().map(diff::split);
+            let at = self.scroll;
+            self.sscroll = self.rows2.as_ref().map_or(0, |s| s.origin.partition_point(|&o| o < at));
+        }
+    }
+
+    /// Number of rows in the layout shown.
+    pub fn extent(&self) -> usize {
+        match (&self.rows2, self.split) {
+            (Some(s), true) => s.rows.len(),
+            _ => self.diff.as_ref().map_or(0, |d| d.rows.len()),
+        }
+    }
+
+    /// First visible row in the layout shown.
+    pub fn pos(&self) -> usize {
+        if self.split { self.sscroll } else { self.scroll }
+    }
+
+    /// Scrolls to row `p` of the layout shown; `scroll` always follows in rows of the unified layout.
+    pub fn set_pos(&mut self, p: usize) {
+        match (&self.rows2, self.split) {
+            (Some(s), true) => {
+                self.sscroll = p;
+                self.scroll = s.origin.get(p).copied().unwrap_or(0);
+            }
+            _ => self.scroll = p,
+        }
+    }
+
+    /// Where the hunk headers are in the layout shown.
+    pub fn hunk_marks(&self) -> &[usize] {
+        match (&self.rows2, self.split) {
+            (Some(s), true) => &s.hunks,
+            _ => self.diff.as_ref().map_or(&[], |d| &d.hunks),
+        }
     }
 
     /// True for the file diffs whose hunks can be staged or unstaged.
@@ -1106,6 +1151,8 @@ impl App {
                                 view.diff = Some(diff::parse(&text, &view.file));
                                 view.raw = text;
                                 view.pick = None; // the rows are new
+                                view.rows2 = None;
+                                view.ensure_split();
                             }
                             Err(e) => view.error = Some(e),
                         }
@@ -1505,6 +1552,9 @@ impl App {
             height: 20,
             both,
             pick: None,
+            split: false,
+            sscroll: 0,
+            rows2: None,
             back,
             id: self.diff_id,
         });
@@ -2421,37 +2471,43 @@ impl App {
             return self.on_pick_key(key);
         }
         let page = v.height.saturating_sub(1).max(1);
-        let max = v.diff.as_ref().map_or(0, |d| d.rows.len().saturating_sub(v.height));
+        let max = v.extent().saturating_sub(v.height);
         match key.code {
             KeyCode::Esc | KeyCode::Char('q' | 'd') => {
                 self.mode = v.back;
                 self.diff = None;
             }
-            KeyCode::Down | KeyCode::Char('j') => v.scroll = (v.scroll + 1).min(max),
-            KeyCode::Up | KeyCode::Char('k') => v.scroll = v.scroll.saturating_sub(1),
-            KeyCode::PageDown | KeyCode::Char(' ') => v.scroll = (v.scroll + page).min(max),
-            KeyCode::PageUp | KeyCode::Char('b') => v.scroll = v.scroll.saturating_sub(page),
-            KeyCode::Home | KeyCode::Char('g') => v.scroll = 0,
-            KeyCode::End | KeyCode::Char('G') => v.scroll = max,
+            KeyCode::Down | KeyCode::Char('j') => v.set_pos((v.pos() + 1).min(max)),
+            KeyCode::Up | KeyCode::Char('k') => v.set_pos(v.pos().saturating_sub(1)),
+            KeyCode::PageDown | KeyCode::Char(' ') => v.set_pos((v.pos() + page).min(max)),
+            KeyCode::PageUp | KeyCode::Char('b') => v.set_pos(v.pos().saturating_sub(page)),
+            KeyCode::Home | KeyCode::Char('g') => v.set_pos(0),
+            KeyCode::End | KeyCode::Char('G') => v.set_pos(max),
+            // Side by side or one column.
+            KeyCode::Char('m') => {
+                v.split = !v.split;
+                v.rows2 = None;
+                v.ensure_split();
+            }
             KeyCode::Right | KeyCode::Char('l') => v.hscroll += 8,
             KeyCode::Left | KeyCode::Char('h') => v.hscroll = v.hscroll.saturating_sub(8),
             KeyCode::Char('0') => v.hscroll = 0,
             KeyCode::Char(']' | 'n') => {
-                if let Some(d) = &v.diff {
-                    v.scroll = d.hunks.iter().copied().find(|&h| h > v.scroll).unwrap_or(v.scroll).min(max);
-                }
+                let at = v.pos();
+                let to = v.hunk_marks().iter().copied().find(|&h| h > at).unwrap_or(at).min(max);
+                v.set_pos(to);
             }
             KeyCode::Char('[' | 'N') => {
-                if let Some(d) = &v.diff {
-                    v.scroll = d.hunks.iter().copied().rev().find(|&h| h < v.scroll).unwrap_or(0);
-                }
+                let at = v.pos();
+                let to = v.hunk_marks().iter().copied().rev().find(|&h| h < at).unwrap_or(0);
+                v.set_pos(to);
             }
             KeyCode::Tab | KeyCode::BackTab => {
                 if v.both {
                     v.kind = if v.kind == DiffKind::Staged { DiffKind::Unstaged } else { DiffKind::Staged };
                     self.diff_id += 1;
                     v.id = self.diff_id;
-                    (v.diff, v.error, v.scroll, v.hscroll, v.pick) = (None, None, 0, 0, None);
+                    (v.diff, v.error, v.scroll, v.hscroll, v.pick, v.rows2, v.sscroll) = (None, None, 0, 0, None, None, 0);
                     worker::spawn_diff(v.repo.clone(), v.file.clone(), v.kind, v.id, self.tx.clone());
                 }
             }

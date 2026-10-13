@@ -72,6 +72,68 @@ pub fn hunk_patch(raw: &str, index: usize) -> Option<String> {
     (!body.is_empty()).then(|| header + &body)
 }
 
+/// One line of the side-by-side layout, as indices into `Diff::rows`.
+pub enum SRow {
+    /// A row across both sides: file name, hunk header, notes.
+    Full(usize),
+    /// An old line on the left and the new line it became on the right; either may be missing.
+    Pair(Option<usize>, Option<usize>),
+}
+
+/// The side-by-side layout of a diff.
+pub struct Split {
+    pub rows: Vec<SRow>,
+    /// Indices into `rows` of every hunk header.
+    pub hunks: Vec<usize>,
+    /// For each row, the index of the first of `Diff::rows` it shows, so a position can move between layouts.
+    pub origin: Vec<usize>,
+}
+
+/// Lays `d` out side by side: context on both sides, and each run of removed lines next to the run of added
+/// lines that follows it.
+pub fn split(d: &Diff) -> Split {
+    let mut s = Split { rows: Vec::new(), hunks: Vec::new(), origin: Vec::new() };
+    let sign_at = |i: usize| match d.rows.get(i) {
+        Some(Row::Line { sign, .. }) => Some(*sign),
+        _ => None,
+    };
+    let mut i = 0;
+    while i < d.rows.len() {
+        match sign_at(i) {
+            Some(Sign::Ctx) => {
+                s.origin.push(i);
+                s.rows.push(SRow::Pair(Some(i), Some(i)));
+                i += 1;
+            }
+            Some(_) => {
+                let (mut dels, mut adds) = (Vec::new(), Vec::new());
+                while sign_at(i) == Some(Sign::Del) {
+                    dels.push(i);
+                    i += 1;
+                }
+                while sign_at(i) == Some(Sign::Add) {
+                    adds.push(i);
+                    i += 1;
+                }
+                for k in 0..dels.len().max(adds.len()) {
+                    let (l, r) = (dels.get(k).copied(), adds.get(k).copied());
+                    s.origin.push(l.or(r).unwrap_or(0));
+                    s.rows.push(SRow::Pair(l, r));
+                }
+            }
+            None => {
+                if matches!(d.rows[i], Row::Hunk(_)) {
+                    s.hunks.push(s.rows.len());
+                }
+                s.origin.push(i);
+                s.rows.push(SRow::Full(i));
+                i += 1;
+            }
+        }
+    }
+    s
+}
+
 /// The patch for only some lines of hunk `index` of a single-file diff. `picked` holds the offsets of the lines
 /// to act on, counted from the first line after the hunk header. The other changed lines are left alone: for
 /// a forward patch (staging) an unpicked `-` becomes context and an unpicked `+` is dropped; for a reverse patch

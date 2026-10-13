@@ -24,7 +24,7 @@ use ratatui::{
 use crate::{
     app::{App, Choice, Filter, Focus, InputKind, Mode, ProjectStep},
     banner,
-    diff::{Row, Sign},
+    diff::{Row, SRow, Sign},
     git::{Branch, DiffKind, FileEntry, TreeKind},
     github::{self, Ci, Hits, Kind, Scope},
     langs::Breakdown,
@@ -883,7 +883,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
             return;
         }
-        let mut hints = vec![("↑↓", "scroll"), ("Space", "page"), ("[ ]", "hunk"), ("← →", "pan"), ("g G", "top/end")];
+        let split = app.diff.as_ref().is_some_and(|v| v.split);
+        let mut hints = vec![("↑↓", "scroll"), ("Space", "page"), ("[ ]", "hunk"), ("← →", "pan"), ("m", if split { "one column" } else { "side by side" })];
         if let Some(v) = app.diff.as_ref().filter(|v| v.stageable()) {
             hints.push(("s", if v.kind == DiffKind::Staged { "unstage hunk" } else { "stage hunk" }));
             hints.push(("v", "pick lines"));
@@ -1091,6 +1092,43 @@ fn diff_line(row: &Row, num_w: usize, hscroll: usize, current: bool, cursor: boo
     }
 }
 
+/// Cuts or pads `spans` to exactly `w` columns.
+fn fit_spans(spans: Vec<Span<'static>>, w: usize) -> Vec<Span<'static>> {
+    let (mut out, mut used) = (Vec::new(), 0);
+    for s in spans {
+        let n = s.content.chars().count();
+        if used + n <= w {
+            used += n;
+            out.push(s);
+        } else {
+            let text: String = s.content.chars().take(w - used).collect();
+            used = w;
+            out.push(Span::styled(text, s.style));
+            break;
+        }
+    }
+    if used < w {
+        out.push(Span::raw(" ".repeat(w - used)));
+    }
+    out
+}
+
+/// One side of a row of the side-by-side layout: line number, sign and code, `w` columns wide.
+fn split_cell(row: Option<&Row>, num_w: usize, hscroll: usize, w: usize) -> Vec<Span<'static>> {
+    let Some(Row::Line { sign, old, new, toks }) = row else { return vec![Span::raw(" ".repeat(w))] };
+    let n = if *sign == Sign::Add { new } else { old };
+    let num = n.map_or_else(|| " ".repeat(num_w), |n| format!("{n:>num_w$}"));
+    let reversed = PLAIN.add_modifier(Modifier::REVERSED).add_modifier(Modifier::BOLD);
+    let (mark, style) = match sign {
+        Sign::Add => (" + ", hue(reversed, GOOD)),
+        Sign::Del => (" - ", hue(reversed, BAD)),
+        Sign::Ctx => ("   ", PLAIN),
+    };
+    let mut spans = vec![Span::styled(format!("{num} "), DIM), Span::styled(mark, style), Span::raw(" ")];
+    spans.extend(code_spans(toks, hscroll));
+    fit_spans(spans, w)
+}
+
 /// The diff viewer: a full-screen panel over the dashboard.
 fn draw_diff(f: &mut Frame, app: &mut App) {
     let [area, _] = Layout::vertical([Constraint::Min(0), Constraint::Length(footer_height(app))]).areas(f.area());
@@ -1113,6 +1151,7 @@ fn draw_diff(f: &mut Frame, app: &mut App) {
     if let Some(e) = &v.error {
         return note(format!("git diff failed: {}", e.lines().next().unwrap_or("")), block, f);
     }
+    v.ensure_split();
     let Some(d) = &v.diff else {
         return note("Loading diff…".to_string(), block, f);
     };
@@ -1120,8 +1159,22 @@ fn draw_diff(f: &mut Frame, app: &mut App) {
         return note("No textual changes.".to_string(), block, f);
     }
 
-    v.scroll = v.scroll.min(d.rows.len().saturating_sub(v.height));
-    let last = (v.scroll + v.height).min(d.rows.len());
+    // The first visible row is counted in the layout shown; `scroll` follows it in unified rows.
+    let side = v.split.then_some(()).and(v.rows2.as_ref());
+    let total = side.map_or(d.rows.len(), |s| s.rows.len());
+    let max = total.saturating_sub(v.height);
+    let start = match side {
+        Some(s) => {
+            v.sscroll = v.sscroll.min(max);
+            v.scroll = s.origin.get(v.sscroll).copied().unwrap_or(0);
+            v.sscroll
+        }
+        None => {
+            v.scroll = v.scroll.min(max);
+            v.scroll
+        }
+    };
+    let last = (start + v.height).min(total);
     let hunk = v.hunk();
     let hunk_label = match hunk {
         Some(k) if v.stageable() => format!(" · hunk {}/{}", k + 1, d.hunks.len()),
@@ -1133,19 +1186,36 @@ fn draw_diff(f: &mut Frame, app: &mut App) {
         Line::from(vec![
             Span::styled(format!(" +{}", d.added), hue(BOLD, GOOD)),
             Span::styled(format!(" −{}", d.removed), hue(BOLD, BAD)),
-            Span::styled(format!("{hunk_label}{lines_label} · {}-{last}/{} ", v.scroll + 1, d.rows.len()), DIM),
+            Span::styled(format!("{hunk_label}{lines_label}{} · {}-{last}/{total} ", if side.is_some() { " · side by side" } else { "" }, start + 1), DIM),
         ])
         .right_aligned(),
     );
-    let mut lines: Vec<Line> = d.rows[v.scroll..last]
-        .iter()
-        .enumerate()
-        .map(|(k, r)| {
-            let row = v.scroll + k;
-            let (cursor, picked) = v.pick.as_ref().map_or((false, false), |p| (p.cursor == row, p.picked.contains(&row)));
-            diff_line(r, d.num_w, v.hscroll, marked == Some(row), cursor, picked)
-        })
-        .collect();
+    let mut lines: Vec<Line> = match side {
+        Some(s) => {
+            let cell = (block.inner(area).width as usize).saturating_sub(3) / 2;
+            s.rows[start..last]
+                .iter()
+                .map(|r| match r {
+                    SRow::Full(i) => diff_line(&d.rows[*i], d.num_w, v.hscroll, marked == Some(*i), false, false),
+                    SRow::Pair(l, r) => {
+                        let mut spans = split_cell(l.map(|i| &d.rows[i]), d.num_w, v.hscroll, cell);
+                        spans.push(Span::styled(" │ ", DIM));
+                        spans.extend(split_cell(r.map(|i| &d.rows[i]), d.num_w, v.hscroll, cell));
+                        Line::from(spans)
+                    }
+                })
+                .collect()
+        }
+        None => d.rows[start..last]
+            .iter()
+            .enumerate()
+            .map(|(k, r)| {
+                let row = start + k;
+                let (cursor, picked) = v.pick.as_ref().map_or((false, false), |p| (p.cursor == row, p.picked.contains(&row)));
+                diff_line(r, d.num_w, v.hscroll, marked == Some(row), cursor, picked)
+            })
+            .collect(),
+    };
     if d.truncated && last == d.rows.len() {
         lines.push(Line::from(Span::styled("… diff cut off after the first rows", DIM.add_modifier(Modifier::ITALIC))));
     }
@@ -1659,6 +1729,7 @@ fn draw_help(f: &mut Frame) {
         ("L / U", "pull every behind / push every ahead repository in view"),
         ("m z Z", "merge a branch (empty = upstream) / stash all changes / pop the stash"),
         ("d v b I", "diff of the file / commit log / branches / git init in any folder"),
+        ("v x m e", "in the diff: pick single lines to stage / discard hunk or lines / side by side / edit the file"),
         ("Ctrl+P", "find a file of the repository by name and read it (/ searches it, : goes to a line)"),
         ("W", "worktrees and submodules: add / remove / go to / update"),
         ("N", "GitHub workflows: run one by hand with its inputs, or write a new one (n)"),

@@ -22,7 +22,7 @@ screen, and lets you stage, commit, push, pull, fetch and merge without leaving 
 - **Owned vs cloned filter**: switch between *All*, *Owned*, *Cloned* and *Attention* (dirty, ahead, behind or broken) repositories.
 - **Sorting, pinning and hiding**: sort by name, last commit, changes or commits behind; pin favourites to the top and ignore noisy repositories.
 - **Git actions**: stage/unstage (per file or all), commit, push, pull, fetch (one repo or all), merge, stash and pop; pull or push every repository in view at once.
-- **Diff viewer with syntax highlighting**: read the staged, unstaged or untracked diff of any changed file with line numbers and per-language colors, without leaving Oxide.
+- **Diff viewer with syntax highlighting**: read the staged, unstaged or untracked diff of any changed file with line numbers and per-language colors, one column or side by side, and stage, unstage or discard whole hunks or single lines, without leaving Oxide.
 - **Commit log and branches**: browse a repository's history and open any commit's diff; list, switch, create, merge and delete branches, with merged and stale ones flagged.
 - **`git init` anywhere**: initialise a repository in any folder, existing or new, and see it in the list right away.
 - **GitHub** (needs the [`gh`](https://cli.github.com) CLI, logged in): browse a repository's issues and pull requests, read them, diff and check out pull requests, find repositories (yours or anyone's) and clone them, and open things in your browser.
@@ -489,8 +489,22 @@ differs: bold keywords and dim italic comments.
 | `←` `→` / `h` `l`, `0` | Pan long lines, back to the left edge |
 | `Tab` | Staged / unstaged version, when the file has both |
 | `s` | Stage the hunk at the top of the screen (unstaged version), or unstage it (staged version) |
+| `v` | Pick single lines of that hunk (see below) |
+| `x` | Discard the hunk at the top of the screen from the working tree (unstaged version; asks `y`) |
+| `m` | Side by side / one column |
 | `e` | Edit the file in your editor, at the first line shown (working-tree diffs only) |
 | `Esc`, `q`, `d` | Close |
+
+**Picking lines** (`v`): the cursor `▸` moves over the added and removed lines of the hunk at the top of the
+screen. `Space` picks a line (shown as `[+]` / `[-]`) and moves on, `a` picks every line of the hunk or none,
+`s` or `Enter` stages the picked lines (unstages them in the staged version), `x` throws them away from the
+working tree (unstaged version, after a `y`), and `Esc` goes back. With nothing picked, `s` and `x` act on the
+line under the cursor. The lines you leave alone stay as they are, so a changed line can be staged as only
+its removal or only its addition. Discarding cannot be undone.
+
+**Side by side** (`m`): the old file on the left and the new one on the right, each run of removed lines next
+to the added lines that replaced it. `[` `]`, paging and panning work as in one column; picking lines
+switches back to one column.
 
 The hunk `s` acts on is marked `▸` and counted in the title (`hunk 2/5`); `[` `]` move between hunks. The
 diff reloads after each stage, and once a file has no hunks left on one side the viewer follows it to the other.

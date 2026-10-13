@@ -50,6 +50,7 @@ impl App {
         let Some(k) = v.hunk() else { return self.log(Level::Warn, "no hunk here") };
         match v.changed(k).first() {
             Some(&cursor) => {
+                v.split = false; // lines are picked in the one-column layout
                 v.pick = Some(LinePick { hunk: k, cursor, picked: BTreeSet::new() });
                 v.reveal(cursor);
             }
