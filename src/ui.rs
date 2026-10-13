@@ -29,7 +29,7 @@ use crate::{
     logger::{self, Level},
     palette,
     repo::{Health, Owner, Repo},
-    scaffold::langs,
+    scaffold::{PackageKind, langs},
     syntax::Tok,
     term::Term,
 };
@@ -149,7 +149,7 @@ fn draw_project(f: &mut Frame, app: &mut App) {
     let name = v.repo.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     let page = match v.step {
         ProjectStep::Lang => "language",
-        ProjectStep::Package => "package",
+        ProjectStep::Package => langs()[v.lang].package.map_or("package", |p| p.kind.noun()),
         ProjectStep::Variant => "variant",
         ProjectStep::License => "license",
         ProjectStep::Confirm => "confirm",
@@ -206,10 +206,11 @@ fn draw_project(f: &mut Frame, app: &mut App) {
             f.render_stateful_widget(List::new(items).highlight_style(INVERSE), list, &mut v.lang_state);
         }
         ProjectStep::Package => {
+            let kind = langs()[v.lang].package.map_or(PackageKind::Packages, |p| p.kind);
             let mut lines = vec![
-                Line::from(Span::styled("Package names, separated by commas; the first one holds the main code.", DIM)),
+                Line::from(Span::styled(kind.help(), DIM)),
                 Line::raw(""),
-                Line::from(vec![Span::styled("Package ▸ ", hue(BOLD, ACCENT)), Span::styled(v.package.clone(), BOLD), Span::styled("█", PLAIN)]),
+                Line::from(vec![Span::styled(format!("{} ▸ ", kind.noun().chars().next().map_or_else(String::new, |c| c.to_uppercase().chain(kind.noun().chars().skip(1)).collect())), hue(BOLD, ACCENT)), Span::styled(v.package.clone(), BOLD), Span::styled("█", PLAIN)]),
             ];
             if let Some(e) = &v.package_error {
                 lines.push(Line::from(Span::styled(fit(e, inner.width as usize), hue(BOLD, BAD))));
@@ -857,7 +858,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     if let (Mode::Project, Some(v)) = (app.mode, &app.project) {
         let hints: &[(&str, &str)] = match (v.step, v.editing) {
             (ProjectStep::Lang, _) => &[("↑↓", "move"), ("type", "filter"), ("Enter", "select"), ("Esc", "clear/close")],
-            (ProjectStep::Package, _) => &[("type", "package names"), ("Enter", "continue"), ("Esc", "back")],
+            (ProjectStep::Package, _) => &[("type", "the name"), ("Enter", "continue"), ("Esc", "back")],
             (ProjectStep::Variant, _) => &[("↑↓", "move"), ("Enter", "select"), ("Esc", "back")],
             (ProjectStep::License, false) => &[("↑↓", "move"), ("Tab", "edit holder"), ("Enter", "continue"), ("Esc", "back")],
             (ProjectStep::License, true) => &[("type", "copyright holder"), ("Enter", "done")],

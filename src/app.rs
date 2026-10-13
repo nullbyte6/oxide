@@ -26,7 +26,7 @@ use crate::{
     marks::{Mark, Marks},
     palette,
     repo::{Health, Owner, Repo},
-    scaffold::{self, Plan, langs},
+    scaffold::{self, PackageKind, Plan, langs},
     term::Term,
     watch::Watcher,
     worker::{self, Msg},
@@ -2583,7 +2583,7 @@ impl App {
                         Some(Choice::Lang(i)) => {
                             v.lang = *i;
                             v.variant_state.select(Some(0));
-                            v.package = scaffold::default_package(&v.repo, &langs()[*i]).unwrap_or_default();
+                            v.package = scaffold::default_package(&v.repo, &langs()[*i], &v.holder).unwrap_or_default();
                             v.package_error = None;
                             v.packages.clear();
                             v.step = v.after_lang();
@@ -2613,7 +2613,7 @@ impl App {
             }
             ProjectStep::Package => match key.code {
                 KeyCode::Esc => v.step = ProjectStep::Lang,
-                KeyCode::Enter => match scaffold::parse_packages(&v.package) {
+                KeyCode::Enter => match scaffold::parse_packages(&v.package, langs()[v.lang].package.map_or(PackageKind::Packages, |p| p.kind)) {
                     Ok(packages) => {
                         v.packages = packages;
                         v.package_error = None;

@@ -16,7 +16,7 @@ use std::{
 
 use crate::{
     git,
-    scaffold::{Lang, Step, Variant},
+    scaffold::{Lang, Package, PackageKind, Step, Variant},
 };
 
 /// How many directory levels below a root are searched for repositories.
@@ -206,7 +206,7 @@ fn read_languages(conf: &Table) -> (Vec<Lang>, Option<String>) {
                 return Err(format!("{name}: variants is empty"));
             }
             let key = t.get::<Option<String>>("key").ok().flatten().unwrap_or_default();
-            let package = t.get::<Option<String>>("package").ok().flatten().map(keep);
+            let package = t.get::<Option<String>>("package").ok().flatten().map(|suggest| Package { kind: PackageKind::Packages, suggest: keep(suggest) });
             Ok(Lang { name: keep(name), key: keep(key), ignore: keep(strings(&t, "ignore").join("\n")), package, variants: variants.leak() })
         });
         match one {

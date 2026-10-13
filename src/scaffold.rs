@@ -40,6 +40,45 @@ pub struct Variant {
     pub steps: &'static [Step],
 }
 
+/// What a language calls the name the menu asks for, which decides how it is checked.
+#[derive(Clone, Copy, PartialEq)]
+pub enum PackageKind {
+    /// Packages: one or more dot-separated names (Java, Kotlin, Scala).
+    Packages,
+    /// A module path such as `github.com/you/app` (Go).
+    Module,
+    /// A single dot-separated namespace (C#).
+    Namespace,
+}
+
+impl PackageKind {
+    /// Name of the menu page and of the field on it.
+    pub fn noun(self) -> &'static str {
+        match self {
+            PackageKind::Packages => "package",
+            PackageKind::Module => "module",
+            PackageKind::Namespace => "namespace",
+        }
+    }
+
+    /// The line above the field.
+    pub fn help(self) -> &'static str {
+        match self {
+            PackageKind::Packages => "Package names, separated by commas; the first one holds the main code.",
+            PackageKind::Module => "Module path of go.mod, e.g. github.com/you/app.",
+            PackageKind::Namespace => "Root namespace of the project, e.g. Company.App.",
+        }
+    }
+}
+
+/// The question a package-like language asks, with its suggested answer. The suggestion may use `{pkg}`,
+/// `{slug}`, `{Pascal}` (`MyApp`) and `{user}`.
+#[derive(Clone, Copy)]
+pub struct Package {
+    pub kind: PackageKind,
+    pub suggest: &'static str,
+}
+
 #[derive(Clone, Copy)]
 pub struct Lang {
     pub name: &'static str,
@@ -47,10 +86,9 @@ pub struct Lang {
     pub key: &'static str,
     /// Extra `.gitignore` lines for languages defined in `config.lua`; empty for the built-in ones.
     pub ignore: &'static str,
-    /// For languages whose code lives in packages: the suggested package, which the menu asks about before
-    /// the variant. Placeholders work as in steps. Steps use it as `{package}` (`com.example.app`) and
-    /// `{package_path}` (`com/example/app`).
-    pub package: Option<&'static str>,
+    /// For languages whose code lives in packages, modules or namespaces: what the menu asks about before the
+    /// variant. Steps use the answer as `{package}` (`com.example.app`) and `{package_path}` (`com/example/app`).
+    pub package: Option<Package>,
     /// Never empty; the first one is the default.
     pub variants: &'static [Variant],
 }
@@ -137,9 +175,9 @@ const BUILTIN: &[Lang] = &[
         name: "Go",
         key: "go",
         ignore: "",
-        package: None,
+        package: Some(Package { kind: PackageKind::Module, suggest: "github.com/{user}/{slug}" }),
         variants: &[v("Module", "go mod init, cmd/ and internal/", &[
-            Run("go mod init {slug}"),
+            Run("go mod init {package}"),
             File("cmd/{pkg}/main.go", GO_MAIN),
             Dir("internal"),
         ])],
@@ -148,7 +186,7 @@ const BUILTIN: &[Lang] = &[
         name: "Java",
         key: "java",
         ignore: "",
-        package: Some("com.example.{pkg}"),
+        package: Some(Package { kind: PackageKind::Packages, suggest: "com.example.{pkg}" }),
         variants: &[
             v("Maven", "pom.xml, src/main/java, src/test/java", &[
                 File("pom.xml", JAVA_POM),
@@ -176,7 +214,7 @@ const BUILTIN: &[Lang] = &[
         name: "Kotlin",
         key: "kotlin",
         ignore: "",
-        package: Some("com.example.{pkg}"),
+        package: Some(Package { kind: PackageKind::Packages, suggest: "com.example.{pkg}" }),
         variants: &[v("Gradle (Kotlin DSL)", "build.gradle.kts, src/main/kotlin", &[
             File("settings.gradle.kts", "rootProject.name = \"{slug}\"\n"),
             File("build.gradle.kts", KOTLIN_GRADLE),
@@ -218,10 +256,16 @@ const BUILTIN: &[Lang] = &[
         name: "C#",
         key: "csharp",
         ignore: "",
-        package: None,
+        package: Some(Package { kind: PackageKind::Namespace, suggest: "{Pascal}" }),
         variants: &[
-            v("Console", "dotnet new console", &[Run("dotnet new console --name {slug} --output .")]),
-            v("Class library", "dotnet new classlib", &[Run("dotnet new classlib --name {slug} --output .")]),
+            v("Console", "{slug}.csproj, Program.cs", &[
+                File("{slug}.csproj", CSHARP_EXE),
+                File("src/Program.cs", CSHARP_MAIN),
+            ]),
+            v("Class library", "{slug}.csproj, Class1.cs", &[
+                File("{slug}.csproj", CSHARP_LIB),
+                File("src/Class1.cs", CSHARP_CLASS),
+            ]),
         ],
     },
     Lang {
@@ -294,7 +338,7 @@ const BUILTIN: &[Lang] = &[
         name: "Scala",
         key: "scala",
         ignore: "",
-        package: Some("com.example.{pkg}"),
+        package: Some(Package { kind: PackageKind::Packages, suggest: "com.example.{pkg}" }),
         variants: &[v("sbt", "build.sbt, src/main/scala", &[
             File("build.sbt", SCALA_SBT),
             File("project/build.properties", "sbt.version=1.10.7\n"),
@@ -414,6 +458,7 @@ impl Plan {
     pub fn build(root: &Path, lang: &Lang, variant: &Variant, packages: &[String], license: Option<&License>, holder: &str, year: i64) -> Plan {
         let name = project_name(root);
         let (pkg, slug, user) = (ident(&name, '_', "app"), ident(&name, '-', "app"), ident(holder, '_', "app"));
+        let pascal = pascal(&name);
         // `{package}` is the first package: the one that holds the main code. Directories that mention a
         // package are made for every package, so the others get their (empty) folders too.
         let fill_for = |s: &str, package: &str| {
@@ -421,6 +466,7 @@ impl Plan {
                 .replace("{pkg}", &pkg)
                 .replace("{slug}", &slug)
                 .replace("{user}", &user)
+                .replace("{Pascal}", &pascal)
                 .replace("{package_path}", &package.replace('.', "/"))
                 .replace("{package}", package)
         };
@@ -539,29 +585,52 @@ fn merge_lines(old: &str, template: &str) -> Option<String> {
     Some(format!("{old}{sep}{}\n", add.join("\n\n").trim_end()))
 }
 
-/// The package suggested for a project in `root`, for a language that asks for one.
-pub fn default_package(root: &Path, lang: &Lang) -> Option<String> {
+/// The answer suggested on the package page for a project in `root` whose owner is `holder`.
+pub fn default_package(root: &Path, lang: &Lang, holder: &str) -> Option<String> {
     let name = project_name(root);
-    lang.package.map(|p| p.replace("{pkg}", &ident(&name, '_', "app")).replace("{slug}", &ident(&name, '-', "app")))
+    lang.package.map(|p| {
+        p.suggest
+            .replace("{pkg}", &ident(&name, '_', "app"))
+            .replace("{slug}", &ident(&name, '-', "app"))
+            .replace("{Pascal}", &pascal(&name))
+            .replace("{user}", &ident(holder, '-', "user"))
+    })
 }
 
-/// The packages in what was typed: names separated by commas, each parts separated by dots. The first one holds
-/// the main code. The error says what is wrong with the first bad name.
-pub fn parse_packages(text: &str) -> Result<Vec<String>, String> {
+/// What was typed on the package page, checked for `kind`: for packages, names separated by commas (the first
+/// holds the main code); for a module or namespace, exactly one. The error says what is wrong.
+pub fn parse_packages(text: &str, kind: PackageKind) -> Result<Vec<String>, String> {
+    let names: Vec<&str> = text.split(',').map(str::trim).filter(|n| !n.is_empty()).collect();
     let mut out: Vec<String> = Vec::new();
-    for name in text.split(',').map(str::trim).filter(|n| !n.is_empty()) {
-        let ok = name.split('.').all(|part| {
-            let mut chars = part.chars();
-            chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-        });
+    for name in &names {
+        let dotted = |name: &str| {
+            name.split('.').all(|part| {
+                let mut chars = part.chars();
+                chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+            })
+        };
+        let ok = match kind {
+            PackageKind::Packages | PackageKind::Namespace => dotted(name),
+            // A module path is a URL-like path: no spaces, no empty parts.
+            PackageKind::Module => {
+                name.split('/').all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric() || "._~-".contains(c)))
+            }
+        };
         if !ok {
-            return Err(format!("'{name}' is not a valid package (letters, digits, _ and dots; no leading digit)"));
+            return Err(match kind {
+                PackageKind::Module => format!("'{name}' is not a module path (letters, digits and . _ ~ - between slashes)"),
+                _ => format!("'{name}' is not a valid {} (letters, digits, _ and dots; no leading digit)", kind.noun()),
+            });
         }
         if !out.iter().any(|p| p == name) {
-            out.push(name.to_string());
+            out.push((*name).to_string());
         }
     }
-    if out.is_empty() { Err("write at least one package name".to_string()) } else { Ok(out) }
+    match (out.len(), kind) {
+        (0, _) => Err(format!("write a {} name", kind.noun())),
+        (n, PackageKind::Module | PackageKind::Namespace) if n > 1 => Err(format!("only one {} is possible", kind.noun())),
+        _ => Ok(out),
+    }
 }
 
 /// A repository can be set up when nothing is in it but Git's own `.git` (a folder, or a file in worktrees).
@@ -572,6 +641,23 @@ pub fn is_empty(root: &Path) -> bool {
 /// The name of the project in `root`: the name of its directory.
 fn project_name(root: &Path) -> String {
     root.file_name().map_or_else(|| "project".to_string(), |n| n.to_string_lossy().into_owned())
+}
+
+/// `s` in PascalCase (`my-app` -> `MyApp`), or `App` when nothing is left of it.
+fn pascal(s: &str) -> String {
+    let out: String = s
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut chars = w.chars();
+            chars.next().map_or_else(String::new, |c| c.to_uppercase().chain(chars).collect())
+        })
+        .collect();
+    match out.chars().next() {
+        None => "App".to_string(),
+        Some(c) if c.is_ascii_digit() => format!("P{out}"),
+        Some(_) => out,
+    }
 }
 
 /// `s` as a lowercase identifier with `sep` between words (`My App` -> `my_app`), or `fallback` when nothing is left of it.
@@ -781,6 +867,37 @@ tasks.test {
     useJUnitPlatform()
 }
 "##;
+
+const CSHARP_EXE: &str = r##"<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>{package}</RootNamespace>
+    <AssemblyName>{slug}</AssemblyName>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>
+"##;
+
+const CSHARP_LIB: &str = r##"<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>{package}</RootNamespace>
+    <AssemblyName>{slug}</AssemblyName>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>
+"##;
+
+const CSHARP_MAIN: &str = "namespace {package};\n\npublic static class Program\n{\n    public static void Main()\n    {\n        Console.WriteLine(\"Hello, world!\");\n    }\n}\n";
+
+const CSHARP_CLASS: &str = "namespace {package};\n\npublic class Class1\n{\n}\n";
 
 const KOTLIN_MAIN: &str = "package {package}\n\nfun main() {\n    println(\"Hello, world!\")\n}\n";
 
