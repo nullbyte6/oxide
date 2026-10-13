@@ -53,6 +53,10 @@ pub enum PackageKind {
     Importable,
     /// A library name in lowercase_snake_case that names the files of `lib/` (Ruby, Dart).
     Snake,
+    /// A name in PascalCase that is also the module name (Swift).
+    Pascal,
+    /// A Cabal package name: lowercase words joined by hyphens (Haskell).
+    Hyphen,
     /// A PHP namespace, parts separated by backslashes (`Acme\\App`), mapped to `src/` by PSR-4.
     PhpNamespace,
 }
@@ -61,7 +65,7 @@ impl PackageKind {
     /// Name of the menu page and of the field on it.
     pub fn noun(self) -> &'static str {
         match self {
-            PackageKind::Packages | PackageKind::Importable | PackageKind::Snake => "package",
+            PackageKind::Packages | PackageKind::Importable | PackageKind::Snake | PackageKind::Pascal | PackageKind::Hyphen => "package",
             PackageKind::Module => "module",
             PackageKind::Namespace | PackageKind::PhpNamespace => "namespace",
         }
@@ -78,6 +82,8 @@ impl PackageKind {
             PackageKind::Packages | PackageKind::Namespace => "letters, digits, _ and dots; no leading digit",
             PackageKind::Importable => "letters, digits and _; no leading digit",
             PackageKind::Snake => "lowercase letters, digits and _, starting with a letter",
+            PackageKind::Pascal => "letters, digits and _, starting with a capital letter",
+            PackageKind::Hyphen => "lowercase letters, digits and -, words joined by -, each with a letter",
             PackageKind::PhpNamespace => "letters, digits and _ between \\; no leading digit",
             PackageKind::Module => "letters, digits and . _ ~ - between slashes",
         }
@@ -90,7 +96,9 @@ impl PackageKind {
             PackageKind::Module => "Module path of go.mod, e.g. github.com/you/app.",
             PackageKind::Namespace => "Root namespace of the project, e.g. Company.App.",
             PackageKind::Importable => "Name the code is imported by, e.g. my_app; it becomes the folder under src/.",
-            PackageKind::Snake => "Library name in lowercase_snake_case, e.g. my_app; it names the files of lib/.",
+            PackageKind::Snake => "lowercase_snake_case name, e.g. my_app; it names the files in lib/.",
+            PackageKind::Pascal => "PascalCase package and module name, e.g. MyApp (Sources/MyApp).",
+            PackageKind::Hyphen => "Cabal package name: lowercase words joined by hyphens, e.g. my-app.",
             PackageKind::PhpNamespace => "Root namespace with backslashes, e.g. Acme\\App (PSR-4, mapped to src/).",
         }
     }
@@ -319,10 +327,10 @@ const BUILTIN: &[Lang] = &[
         name: "Swift",
         key: "swift",
         ignore: "",
-        package: None,
+        package: Some(Package { kind: PackageKind::Pascal, suggest: "{Pascal}" }),
         variants: &[
-            v("Executable", "swift package init", &[Run("swift package init --type executable --name {pkg}")]),
-            v("Library", "swift package init --type library", &[Run("swift package init --type library --name {pkg}")]),
+            v("Executable", "swift package init", &[Run("swift package init --type executable --name {package}")]),
+            v("Library", "swift package init --type library", &[Run("swift package init --type library --name {package}")]),
         ],
     },
     Lang {
@@ -355,15 +363,15 @@ const BUILTIN: &[Lang] = &[
         name: "Elixir",
         key: "elixir",
         ignore: "",
-        package: None,
-        variants: &[v("Mix", "mix new", &[Run("mix new . --app {pkg}")])],
+        package: Some(Package { kind: PackageKind::Snake, suggest: "{pkg}" }),
+        variants: &[v("Mix", "mix new", &[Run("mix new . --app {package}")])],
     },
     Lang {
         name: "Haskell",
         key: "haskell",
         ignore: "",
-        package: None,
-        variants: &[v("Cabal", "cabal init, app/", &[Run("cabal init --non-interactive --exe --package-name={slug}")])],
+        package: Some(Package { kind: PackageKind::Hyphen, suggest: "{slug}" }),
+        variants: &[v("Cabal", "cabal init, app/", &[Run("cabal init --non-interactive --exe --package-name={package}")])],
     },
     Lang {
         name: "Scala",
@@ -651,6 +659,10 @@ pub fn parse_packages(text: &str, kind: PackageKind) -> Result<Vec<String>, Stri
         let ok = match kind {
             PackageKind::Packages | PackageKind::Namespace => joined(name, Some('.')),
             PackageKind::Importable => joined(name, None),
+            PackageKind::Pascal => name.starts_with(|c: char| c.is_ascii_uppercase()) && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+            PackageKind::Hyphen => {
+                name.split('-').all(|word| word.chars().any(|c| c.is_ascii_lowercase()) && word.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()))
+            }
             PackageKind::Snake => name.starts_with(|c: char| c.is_ascii_lowercase()) && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
             PackageKind::PhpNamespace => joined(name, Some('\\')),
             // A module path is a URL-like path: no spaces, no empty parts.
