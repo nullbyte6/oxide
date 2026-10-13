@@ -21,10 +21,12 @@ use crate::{
     git::{self, Branch, Commit, DiffKind, Op, ReflogEntry, Remote, TreeItem, TreeKind},
     langs::Breakdown,
     github::{self, Ci, Hits, Item, Kind, Scope, State},
+    license::{LICENSES, License},
     logger::{self, Level, Logger},
     marks::{Mark, Marks},
     palette,
     repo::{Health, Owner, Repo},
+    scaffold::{self, LANGS, Plan},
     term::Term,
     watch::Watcher,
     worker::{self, Msg},
@@ -340,6 +342,64 @@ pub struct Confirm {
     pub back: Mode,
 }
 
+/// The pages of the new-project menu.
+#[derive(Clone, Copy, PartialEq)]
+pub enum ProjectStep {
+    Lang,
+    Variant,
+    License,
+    Confirm,
+}
+
+/// A row of the language page.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Choice {
+    /// An index into `scaffold::LANGS`.
+    Lang(usize),
+    /// Skip the menu and set the project up by hand in the embedded terminal.
+    Other,
+}
+
+/// The new-project menu (`K`) for an empty repository: language, variant, license, then a plan to confirm.
+pub struct ProjectView {
+    pub repo: PathBuf,
+    pub step: ProjectStep,
+    /// Text typed on the language page; it narrows the list.
+    pub query: String,
+    pub lang_state: ListState,
+    /// The chosen language, an index into `LANGS`.
+    pub lang: usize,
+    pub variant_state: ListState,
+    /// Selection on the license page; `LICENSES.len()` is "no license".
+    pub license_state: ListState,
+    /// Copyright holder of the LICENSE, edited on the license page.
+    pub holder: String,
+    /// The holder is being typed instead of the list being moved.
+    pub editing: bool,
+    pub year: i64,
+    /// Make a first commit with the new files (set on the confirmation page).
+    pub commit: bool,
+    /// What will be done, built when the confirmation page opens.
+    pub plan: Option<Plan>,
+}
+
+impl ProjectView {
+    /// The rows of the language page that match the query, "Other" last.
+    pub fn choices(&self) -> Vec<Choice> {
+        let q = self.query.to_lowercase();
+        let mut out: Vec<Choice> = (0..LANGS.len()).filter(|&i| LANGS[i].name.to_lowercase().contains(&q)).map(Choice::Lang).collect();
+        if q.is_empty() || ["other", "manual", "terminal"].iter().any(|w| w.contains(&q)) {
+            out.push(Choice::Other);
+        }
+        out
+    }
+
+    /// The chosen license; None for "no license".
+    pub fn license(&self) -> Option<&'static License> {
+        self.license_state.selected().and_then(|i| LICENSES.get(i))
+    }
+}
+
 /// Which pane receives navigation keys.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Focus {
@@ -405,6 +465,8 @@ pub enum Mode {
     Finder,
     /// The embedded terminal (`App::terms[App::term]`) is open and gets every key.
     Terminal,
+    /// The new-project menu (`App::project`) is open.
+    Project,
     Help,
 }
 
@@ -471,6 +533,7 @@ pub struct App {
     pub gh: Option<GhView>,
     pub text: Option<TextView>,
     pub finder: Option<FinderView>,
+    pub project: Option<ProjectView>,
     /// The repository chosen in the finder, waiting for a clone destination.
     clone_slug: Option<String>,
     /// Mode to return to when the input line closes (the dashboard, or the branch list).
@@ -604,6 +667,7 @@ impl App {
             gh: None,
             text: None,
             finder: None,
+            project: None,
             clone_slug: None,
             input_back: Mode::Normal,
             pending_select: None,
@@ -1124,6 +1188,7 @@ impl App {
             Mode::GitHub => self.on_gh_key(key),
             Mode::Text => self.on_text_key(key),
             Mode::Finder => self.on_finder_key(key),
+            Mode::Project => self.on_project_key(key),
             Mode::Terminal => {}
             Mode::Normal => self.on_normal_key(key),
         }
@@ -2418,6 +2483,128 @@ impl App {
         // A deleted file no longer exists to reveal; fall back to the repository folder.
         let target = file.map(|f| r.path.join(&f.path)).filter(|p| p.exists()).unwrap_or_else(|| r.path.clone());
         self.launch = Some(Launch::Browse { repo: r.path.clone(), target });
+    }
+
+    /// Opens the new-project menu for the selected repository, which must be empty.
+    fn open_project(&mut self) {
+        let Some((path, name)) = self.selected().map(|r| (r.path.clone(), r.name.clone())) else { return };
+        if !scaffold::is_empty(&path) {
+            self.log(Level::Warn, format!("{name} is not empty: the new-project menu needs a repository with no files"));
+            return;
+        }
+        let holder = git::global_config("user.name").unwrap_or_default();
+        self.project = Some(ProjectView {
+            repo: path,
+            step: ProjectStep::Lang,
+            query: String::new(),
+            lang_state: ListState::default().with_selected(Some(0)),
+            lang: 0,
+            variant_state: ListState::default().with_selected(Some(0)),
+            license_state: ListState::default().with_selected(Some(0)),
+            holder,
+            editing: false,
+            year: logger::year(),
+            commit: false,
+            plan: None,
+        });
+        self.mode = Mode::Project;
+    }
+
+    fn close_project(&mut self) {
+        self.project = None;
+        self.mode = Mode::Normal;
+    }
+
+    /// Keys of the new-project menu; each page has its own, `Esc` goes back one page.
+    fn on_project_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let Some(v) = self.project.as_mut() else {
+            self.mode = Mode::Normal;
+            return;
+        };
+        let delta = match key.code {
+            KeyCode::Down => 1,
+            KeyCode::Up => -1,
+            KeyCode::Char('n') if ctrl => 1,
+            KeyCode::Char('p') if ctrl => -1,
+            KeyCode::PageDown => 8,
+            KeyCode::PageUp => -8,
+            _ => 0,
+        };
+        match v.step {
+            ProjectStep::Lang => {
+                let choices = v.choices();
+                match key.code {
+                    KeyCode::Esc if !v.query.is_empty() => v.query.clear(),
+                    KeyCode::Esc => return self.close_project(),
+                    KeyCode::Enter => match v.lang_state.selected().and_then(|i| choices.get(i)) {
+                        Some(Choice::Lang(i)) => {
+                            v.lang = *i;
+                            v.variant_state.select(Some(0));
+                            v.step = if LANGS[*i].variants.len() > 1 { ProjectStep::Variant } else { ProjectStep::License };
+                            return;
+                        }
+                        // The menu is only for the common case; anything else is done by hand.
+                        Some(Choice::Other) => {
+                            self.close_project();
+                            return self.open_terminal();
+                        }
+                        None => return,
+                    },
+                    KeyCode::Backspace => {
+                        v.query.pop();
+                    }
+                    KeyCode::Char('u') if ctrl => v.query.clear(),
+                    KeyCode::Char(c) if !ctrl => v.query.push(c),
+                    _ if delta != 0 => {
+                        v.lang_state.select(step(v.lang_state.selected(), choices.len(), delta));
+                        return;
+                    }
+                    _ => return,
+                }
+                // The query changed: start from the best match again.
+                let n = v.choices().len();
+                v.lang_state.select(step(Some(0), n, 0));
+            }
+            ProjectStep::Variant => match key.code {
+                KeyCode::Esc | KeyCode::Backspace => v.step = ProjectStep::Lang,
+                KeyCode::Enter => v.step = ProjectStep::License,
+                _ => v.variant_state.select(step(v.variant_state.selected(), LANGS[v.lang].variants.len(), delta)),
+            },
+            ProjectStep::License if v.editing => match key.code {
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Tab => v.editing = false,
+                KeyCode::Backspace => {
+                    v.holder.pop();
+                }
+                KeyCode::Char('u') if ctrl => v.holder.clear(),
+                KeyCode::Char(c) if !ctrl => v.holder.push(c),
+                _ => {}
+            },
+            ProjectStep::License => match key.code {
+                KeyCode::Esc | KeyCode::Backspace => {
+                    v.step = if LANGS[v.lang].variants.len() > 1 { ProjectStep::Variant } else { ProjectStep::Lang };
+                }
+                KeyCode::Tab => v.editing = true,
+                KeyCode::Enter => {
+                    let lang = &LANGS[v.lang];
+                    let variant = &lang.variants[v.variant_state.selected().unwrap_or(0)];
+                    v.plan = Some(Plan::build(&v.repo, lang, variant, v.license(), v.holder.trim(), v.year));
+                    v.step = ProjectStep::Confirm;
+                }
+                // One extra row after the licenses: no LICENSE file.
+                _ => v.license_state.select(step(v.license_state.selected(), LICENSES.len() + 1, delta)),
+            },
+            ProjectStep::Confirm => match key.code {
+                KeyCode::Esc | KeyCode::Backspace => v.step = ProjectStep::License,
+                KeyCode::Char('c' | ' ') => v.commit = !v.commit,
+                KeyCode::Enter => {
+                    let (name, n) = v.plan.as_ref().map_or((String::new(), 0), |p| (p.name.clone(), p.actions.len()));
+                    self.close_project();
+                    self.log(Level::Info, format!("{name}: {n} setup actions planned (running them is not wired up yet)"));
+                }
+                _ => {}
+            },
+        }
     }
 
     /// Shows the embedded terminal of the selected repository, starting its shell on first use.
