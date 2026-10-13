@@ -66,6 +66,8 @@ oxide [OPTIONS] [PATH...]
 
   PATH...        directories to scan (default: `root` of config.lua, else every mounted drive)
       --list     print the repository table to stdout and exit (no TUI)
+      --check-setups [LANG...]
+                 set up every new-project variant in a temporary folder and build it (see below)
   -h, --help     show help
   -V, --version  show the version
 ```
@@ -356,6 +358,15 @@ If a step fails the rest is not run and the log says which one; the files made s
 
 Add languages, or replace a built-in one of the same name, with `languages` in `config.lua` (see below).
 
+**Checking the setups.** `oxide --check-setups` (optionally followed by words that language names must contain,
+like `oxide --check-setups java rust`) sets up every variant of the menu in a temporary folder, exactly as the
+menu would, and then runs the variant's `check` commands (`cargo build`, `mvn -q -B compile`, `lua src/main.lua`,
+...). Each variant is `ok`, `setup` (made, but the program that checks it is missing), `skipped` (a program the
+setup runs is missing) or `FAILED` with the command and the end of its output; a language whose table has a
+placeholder that nothing fills in, or whose suggested package its own page would refuse, fails too. The exit
+status is 1 when anything failed, and the folders are then kept for a look. Some checks download dependencies,
+so they need the network. A language from `config.lua` can add a `check` list to its variants to take part.
+
 ### Diff viewer
 
 `d` opens the highlighted file's diff full screen: untracked files are shown as entirely added, and a file
@@ -467,7 +478,8 @@ ignore = { "~/dev/vendor" }
 -- .gitignore lines (ignore) and either variants or, for a single setup, run / dirs / files directly.
 -- A language that keeps its code in packages sets package (a suggestion); the menu then asks for the names and
 -- steps can use {package} (org.acme.app) and {package_path} (org/acme/app). Names are checked like Java's; use `{package}` as it is typed.
--- A variant is done in this order: run (command lines, no shell), dirs, files (path = contents).
+-- A variant is done in this order: run (command lines, no shell), dirs, files (path = contents). Its optional
+-- check (a command line or a list) is only used by oxide --check-setups, run inside the finished project.
 -- Command lines and contents may use {name} (the directory name), {slug} (my-app), {pkg} (my_app)
 -- and {user} (your git user name). A built-in language is replaced by one with the same name.
 languages = {
@@ -538,6 +550,7 @@ run in batch mode unless you set `core.sshCommand`, `GIT_SSH_COMMAND` or `GIT_SS
 | `src/langs.rs` | Built-in language table (extensions, colours) and the per-repository language count |
 | `src/term.rs` | Embedded terminal: a shell on a pseudo-terminal, parsed by `vt100`, and the encoding of keys for it |
 | `src/scaffold.rs` | New-project menu data: languages and variants, the plan built from a choice, and running it |
+| `src/check.rs` | `--check-setups`: sets up and builds every variant of the new-project menu in a temporary folder |
 | `src/ignore.rs` | `.gitignore` templates per language family |
 | `src/license.rs` | License list and the text of each (`src/licenses/` holds the long ones) |
 | `src/watch.rs` | inotify file watching of `.git` directories and the selected working tree |
