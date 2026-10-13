@@ -324,13 +324,16 @@ outside the scan roots disappears on the next full rescan (`R`), so add its fold
 1. **Language**: 25 languages, narrowed by typing. *Other / manual…* closes the menu and opens the embedded
    terminal in the repository, for anything the menu does not cover.
 2. **Package** (called **module** for Go and **namespace** for C#): only for Java, Kotlin, Scala, Go, C#, Python,
-   PHP, Ruby and Dart. For Go it is the module path of `go.mod` (suggested `github.com/<you>/<project>`, used by `go mod init`);
+   PHP, Ruby, Dart, Swift, Elixir and Haskell. For Go it is the module path of `go.mod` (suggested `github.com/<you>/<project>`, used by `go mod init`);
    for C# the root namespace (suggested `<Project>` in PascalCase), written to the `.csproj` and the source; for
    Python the name the code is imported by (suggested `my_project`), which becomes `src/<name>/` (and the project
    name with `uv`); for PHP the root namespace with backslashes (suggested `<You>\<Project>`), which is mapped to
    `src/` by PSR-4 in `composer.json`; for Ruby and Dart the library name in `lowercase_snake_case` (suggested
    `my_project`), which names `lib/<name>.rb` and its `module MyProject` for Ruby, and the `name` in
-   `pubspec.yaml` with `bin/<name>.dart` and `lib/<name>.dart` for Dart; for the JVM languages, type one or more package names separated by commas (the
+   `pubspec.yaml` with `bin/<name>.dart` and `lib/<name>.dart` for Dart; for Swift a PascalCase name (suggested
+   `MyProject`) passed to `swift package init --name`; for Elixir a snake_case app name (`mix new . --app`); for
+   Haskell a Cabal package name of lowercase words joined by hyphens (suggested `my-project`, passed to
+   `cabal init --package-name`); for the JVM languages, type one or more package names separated by commas (the
    suggestion is `com.example.<project>`). The first holds the main code; the build tool page and the source
    directories (`src/main/java/org/acme/app`, plus `src/test/...`) use it, and every further package gets its
    own empty folders. Names are checked: dot-separated parts of letters, digits and `_`, none starting with a digit.
