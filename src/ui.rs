@@ -814,6 +814,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     if let Mode::Input(kind) = app.mode {
         let prompt = match kind {
             InputKind::Commit => format!("commit message → {} (Tab: type)", app.selected().map_or("", |r| r.name.as_str())),
+            InputKind::Tag => "new tag on HEAD: a name, then optionally a message (makes it an annotated tag)".to_string(),
             InputKind::RemoteAdd => "add remote: <name> <url> (a lone URL becomes origin when there is none)".to_string(),
             InputKind::RemoteUrl => format!("new URL of remote {}", app.remote_name()),
             InputKind::RemoteRename => format!("new name of remote {}", app.remote_name()),

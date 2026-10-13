@@ -99,6 +99,14 @@ pub enum Op {
     RemoteFetch(String),
     /// Apply one hunk of a diff to the index: stage it, or with `reverse` unstage it.
     Hunk { patch: String, reverse: bool },
+    /// Create a tag on HEAD; a message makes it an annotated tag.
+    Tag { name: String, message: String },
+    /// Push one tag to the repository's remote.
+    PushTag(String),
+    /// Delete a tag; `remote` deletes it from the remote first.
+    DeleteTag { name: String, remote: bool },
+    /// Create a GitHub release for a tag that is already on the remote, with generated notes.
+    Release { tag: String, slug: String, draft: bool },
     /// Set a new project up with a plan from the new-project menu; `commit` also commits the result.
     Setup { plan: Box<Plan>, commit: bool },
 }
@@ -139,6 +147,11 @@ impl Op {
             Op::Hunk { reverse: false, .. } => "stage hunk",
             Op::Hunk { reverse: true, .. } => "unstage hunk",
             Op::Setup { .. } => "set up",
+            Op::Tag { .. } => "tag",
+            Op::PushTag(_) => "push tag",
+            Op::DeleteTag { .. } => "delete tag",
+            Op::Release { draft: false, .. } => "release",
+            Op::Release { draft: true, .. } => "draft release",
         }
     }
 }
@@ -211,6 +224,48 @@ pub fn remote_url(repo: &Path) -> Option<String> {
     let name = remotes.lines().find(|r| *r == "origin").or_else(|| remotes.lines().next())?;
     let url = run(repo, &["config", "--get", &format!("remote.{name}.url")]).ok()?;
     Some(url.trim().to_string()).filter(|u| !u.is_empty())
+}
+
+/// Name of the remote Oxide talks to: `origin`, else the first one.
+pub fn default_remote(repo: &Path) -> Option<String> {
+    let remotes = run(repo, &["remote"]).ok()?;
+    remotes.lines().find(|r| *r == "origin").or_else(|| remotes.lines().next()).map(str::to_string)
+}
+
+/// A tag of a repository.
+pub struct Tag {
+    pub name: String,
+    /// An annotated tag (with its own message); false for a lightweight one.
+    pub annotated: bool,
+    /// Short hash of the commit the tag points at.
+    pub hash: String,
+    /// When it was made, e.g. `3 days ago`.
+    pub age: String,
+    /// The tag message's first line, or the commit subject of a lightweight tag.
+    pub subject: String,
+}
+
+/// The tags of a repository, newest first.
+pub fn tags(repo: &Path) -> Result<Vec<Tag>, String> {
+    let format = "%(refname:short)%09%(objecttype)%09%(objectname:short)%09%(*objectname:short)%09%(creatordate:relative)%09%(contents:subject)";
+    let out = run(repo, &["for-each-ref", "--sort=-creatordate", &format!("--format={format}"), "refs/tags"])?;
+    Ok(out
+        .lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split('\t').collect();
+            let [name, kind, hash, peeled, age, subject] = f[..] else { return None };
+            // For an annotated tag the commit is the peeled object; for a lightweight one the tag is the commit.
+            let commit = if peeled.is_empty() { hash } else { peeled };
+            Some(Tag { name: name.into(), annotated: kind == "tag", hash: commit.into(), age: age.into(), subject: subject.into() })
+        })
+        .collect())
+}
+
+/// Names of the tags on the remote (asks the server, so it can take a while or fail offline).
+pub fn remote_tags(repo: &Path) -> Result<std::collections::HashSet<String>, String> {
+    let remote = default_remote(repo).ok_or("no remote")?;
+    let out = run(repo, &["ls-remote", "--tags", "--refs", &remote])?;
+    Ok(out.lines().filter_map(|l| l.split_once("\trefs/tags/").map(|(_, n)| n.to_string())).collect())
 }
 
 /// `<hash> <subject> (<relative date>)` of HEAD and its commit time as a Unix timestamp.
@@ -591,6 +646,37 @@ pub fn perform(repo: &Path, op: &Op) -> Result<String, String> {
         Op::UnstageAll => run_all(repo, &["reset", "-q"]),
         Op::Commit(msg) => run_all(repo, &["commit", "-m", msg]),
         Op::Setup { plan, commit } => setup(repo, plan, *commit),
+        Op::Tag { name, .. } | Op::PushTag(name) | Op::DeleteTag { name, .. } | Op::Release { tag: name, .. } if name.is_empty() || name.starts_with('-') || name.contains(char::is_whitespace) => {
+            Err(format!("invalid tag name '{name}'"))
+        }
+        Op::Tag { name, message } if message.is_empty() => run_all(repo, &["tag", name]),
+        Op::Tag { name, message } => run_all(repo, &["tag", "-a", name, "-m", message]),
+        Op::PushTag(name) => {
+            let remote = default_remote(repo).ok_or("no remote to push to")?;
+            run_all(repo, &["push", &remote, &format!("refs/tags/{name}")])
+        }
+        Op::DeleteTag { name, remote } => {
+            let mut out = String::new();
+            if *remote {
+                let r = default_remote(repo).ok_or("no remote to delete from")?;
+                out = run_all(repo, &["push", &r, &format!(":refs/tags/{name}")])?;
+            }
+            let local = run_all(repo, &["tag", "-d", name]);
+            // A tag that only exists on the remote is not an error when it was deleted there.
+            match (local, *remote) {
+                (Ok(l), _) => Ok(format!("{out}\n{l}").trim().to_string()),
+                (Err(_), true) => Ok(out),
+                (Err(e), false) => Err(e),
+            }
+        }
+        // `--verify-tag` stops gh from creating the tag on GitHub's default branch when it was never pushed.
+        Op::Release { tag, slug, draft } => {
+            let mut args = vec!["release", "create", tag, "-R", slug, "--generate-notes", "--verify-tag"];
+            if *draft {
+                args.push("--draft");
+            }
+            crate::github::gh_all(Some(repo), &args)
+        }
         Op::Stash => run_all(repo, &["stash", "push", "--include-untracked", "-m", "oxide stash"]),
         Op::StashPop => run_all(repo, &["stash", "pop"]),
         Op::Init => {

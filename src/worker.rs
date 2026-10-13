@@ -60,6 +60,12 @@ pub enum Msg {
     CiFailed(String),
     /// The CI batch finished.
     CiDone,
+    /// The tags (or the error) requested with the given id.
+    Tags { id: u64, result: Result<Vec<git::Tag>, String> },
+    /// Which of the tags are on the remote (or why that is not known) for the request with the given id.
+    TagRemote { id: u64, result: Result<std::collections::HashSet<String>, String> },
+    /// The GitHub releases by tag name (or why they are not known) for the request with the given id.
+    Releases { id: u64, result: Result<std::collections::HashMap<String, github::Release>, String> },
     /// An operation finished.
     Op { path: PathBuf, label: &'static str, result: Result<String, String> },
 }
@@ -192,6 +198,24 @@ pub fn spawn_remotes(repo: PathBuf, id: u64, tx: Sender<Msg>) {
     thread::spawn(move || {
         let _ = tx.send(Msg::Remotes { id, result: git::remotes(&repo) });
     });
+}
+
+/// Loads the tags of a repository in the background; the remote's tags and the GitHub releases (when `slug` is
+/// known) come as separate messages because they need the network.
+pub fn spawn_tags(repo: PathBuf, slug: Option<String>, id: u64, tx: Sender<Msg>) {
+    let (path, sender) = (repo.clone(), tx.clone());
+    thread::spawn(move || {
+        let _ = sender.send(Msg::Tags { id, result: git::tags(&path) });
+    });
+    let sender = tx.clone();
+    thread::spawn(move || {
+        let _ = sender.send(Msg::TagRemote { id, result: git::remote_tags(&repo) });
+    });
+    if let Some(slug) = slug {
+        thread::spawn(move || {
+            let _ = tx.send(Msg::Releases { id, result: github::releases(&slug) });
+        });
+    }
 }
 
 /// Loads worktrees and submodules in the background.

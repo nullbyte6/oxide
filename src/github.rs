@@ -217,6 +217,29 @@ pub fn list(slug: &str, kind: Kind, state: State) -> Result<Vec<Item>, String> {
         .collect())
 }
 
+/// A GitHub release.
+pub struct Release {
+    pub name: String,
+    pub draft: bool,
+    pub prerelease: bool,
+    /// The release GitHub shows as the latest.
+    pub latest: bool,
+}
+
+/// The newest 100 releases of `slug`, by the name of their tag.
+pub fn releases(slug: &str) -> Result<std::collections::HashMap<String, Release>, String> {
+    let jq = r#".[]|[.tagName,.name,.isDraft,.isPrerelease,.isLatest]|@tsv"#;
+    let out = gh(None, &["release", "list", "-R", slug, "--limit", "100", "--json", "tagName,name,isDraft,isPrerelease,isLatest", "--jq", jq])?;
+    Ok(out
+        .lines()
+        .filter_map(|l| {
+            let f: Vec<String> = l.split('\t').map(untsv).collect();
+            let [tag, name, draft, pre, latest] = &f[..] else { return None };
+            Some((tag.clone(), Release { name: name.clone(), draft: draft == "true", prerelease: pre == "true", latest: latest == "true" }))
+        })
+        .collect())
+}
+
 /// A repository in a GitHub search or in your own list.
 pub struct RepoItem {
     /// `owner/repo`.

@@ -18,9 +18,9 @@ use ratatui::widgets::ListState;
 use crate::{
     config::{self, Config},
     diff::{self, Diff},
-    git::{self, Branch, Commit, DiffKind, Op, ReflogEntry, Remote, TreeItem, TreeKind},
+    git::{self, Branch, Commit, DiffKind, Op, ReflogEntry, Remote, Tag, TreeItem, TreeKind},
     langs::Breakdown,
-    github::{self, Ci, Hits, Item, Kind, Scope, State},
+    github::{self, Ci, Hits, Item, Kind, Release, Scope, State},
     license::{LICENSES, License},
     logger::{self, Level, Logger},
     marks::{Mark, Marks},
@@ -227,6 +227,29 @@ pub struct RemotesView {
 
 impl RemotesView {
     fn selected(&self) -> Option<&Remote> {
+        self.items.as_ref()?.get(self.state.selected()?)
+    }
+}
+
+/// The tags of one repository, with what is known about them on the remote and on GitHub.
+pub struct TagsView {
+    pub repo: PathBuf,
+    pub name: String,
+    /// `owner/repo` of the GitHub remote; releases are only offered with one.
+    pub slug: Option<String>,
+    /// None while loading.
+    pub items: Option<Vec<Tag>>,
+    pub error: Option<String>,
+    pub state: ListState,
+    /// The tags on the remote; None while the server is asked, Err when it could not be (offline, no remote).
+    pub remote: Option<Result<HashSet<String>, String>>,
+    /// The GitHub releases by tag; None while loading, Err without `gh` or a GitHub remote.
+    pub releases: Option<Result<HashMap<String, Release>, String>>,
+    id: u64,
+}
+
+impl TagsView {
+    pub fn selected(&self) -> Option<&Tag> {
         self.items.as_ref()?.get(self.state.selected()?)
     }
 }
@@ -444,6 +467,8 @@ pub enum Focus {
 #[derive(Clone, Copy, PartialEq)]
 pub enum InputKind {
     Commit,
+    /// Name of a new tag, optionally followed by a message (which makes it an annotated tag).
+    Tag,
     Merge,
     Search,
     /// Name of a new branch.
@@ -498,6 +523,8 @@ pub enum Mode {
     Terminal,
     /// The new-project menu (`App::project`) is open.
     Project,
+    /// The tags and releases (`App::tags`) are open.
+    Tags,
     Help,
 }
 
@@ -554,6 +581,7 @@ pub struct App {
     pub reflog: Option<ReflogView>,
     pub trees: Option<TreesView>,
     pub remotes: Option<RemotesView>,
+    pub tags: Option<TagsView>,
     /// The remote an open input line is about (change URL, rename).
     remote_target: Option<String>,
     /// Why the next commit may be made with the wrong identity (shown next to the commit prompt).
@@ -691,6 +719,7 @@ impl App {
             reflog: None,
             trees: None,
             remotes: None,
+            tags: None,
             remote_target: None,
             commit_warn: None,
             pending_msg: None,
@@ -906,6 +935,29 @@ impl App {
                         }
                     }
                 }
+                Msg::Tags { id, result } => {
+                    if let Some(v) = self.tags.as_mut().filter(|v| v.id == id) {
+                        match result {
+                            Ok(items) => {
+                                let keep = v.state.selected().unwrap_or(0).min(items.len().saturating_sub(1));
+                                v.state.select(if items.is_empty() { None } else { Some(keep) });
+                                v.items = Some(items);
+                                v.error = None;
+                            }
+                            Err(e) => v.error = Some(e),
+                        }
+                    }
+                }
+                Msg::TagRemote { id, result } => {
+                    if let Some(v) = self.tags.as_mut().filter(|v| v.id == id) {
+                        v.remote = Some(result);
+                    }
+                }
+                Msg::Releases { id, result } => {
+                    if let Some(v) = self.tags.as_mut().filter(|v| v.id == id) {
+                        v.releases = Some(result);
+                    }
+                }
                 Msg::Trees { id, result } => {
                     if let Some(v) = self.trees.as_mut().filter(|v| v.id == id) {
                         match result {
@@ -999,6 +1051,9 @@ impl App {
                     }
                     if self.trees.as_ref().is_some_and(|v| v.main() == path || v.repo == path) {
                         self.load_trees();
+                    }
+                    if self.tags.as_ref().is_some_and(|v| v.repo == path) {
+                        self.load_tags(); // a tag was made, pushed or deleted, or a release made
                     }
                     if label == "commit" {
                         // A commit that failed (a hook said no) keeps its message for the next try.
@@ -1227,6 +1282,7 @@ impl App {
             Mode::Text => self.on_text_key(key),
             Mode::Finder => self.on_finder_key(key),
             Mode::Project => self.on_project_key(key),
+            Mode::Tags => self.on_tags_key(key),
             Mode::Terminal => {}
             Mode::Normal => self.on_normal_key(key),
         }
@@ -1481,6 +1537,117 @@ impl App {
         self.remotes = Some(RemotesView { repo, name, items: None, error: None, state: ListState::default(), id: 0 });
         self.mode = Mode::Remotes;
         self.load_remotes();
+    }
+
+    // ---- tags and releases ----
+
+    fn open_tags(&mut self) {
+        let Some((repo, name, slug)) = self.selected().map(|r| (r.path.clone(), r.name.clone(), r.slug.clone())) else { return };
+        self.tags = Some(TagsView { repo, name, slug, items: None, error: None, state: ListState::default(), remote: None, releases: None, id: 0 });
+        self.mode = Mode::Tags;
+        self.load_tags();
+    }
+
+    /// Loads the tags, then (separately, as they need the network) the remote's tags and the GitHub releases.
+    fn load_tags(&mut self) {
+        self.diff_id += 1;
+        if let Some(v) = self.tags.as_mut() {
+            v.id = self.diff_id;
+            v.remote = None;
+            v.releases = if v.slug.is_none() { Some(Err("no github.com remote".to_string())) } else { None };
+            worker::spawn_tags(v.repo.clone(), v.slug.clone(), v.id, self.tx.clone());
+        }
+    }
+
+    fn on_tags_key(&mut self, key: KeyEvent) {
+        let Some(v) = self.tags.as_mut() else {
+            self.mode = Mode::Normal;
+            return;
+        };
+        let len = v.items.as_ref().map_or(0, Vec::len);
+        let repo = v.repo.clone();
+        let slug = v.slug.clone();
+        let picked = v.selected().map(|t| (t.name.clone(), t.hash.clone()));
+        // What is known about the highlighted tag: on the remote, and its GitHub release.
+        let on_remote = picked.as_ref().and_then(|(n, _)| v.remote.as_ref()?.as_ref().ok().map(|set| set.contains(n)));
+        let released = picked.as_ref().and_then(|(n, _)| v.releases.as_ref()?.as_ref().ok()?.get(n)).is_some();
+        let delta = match key.code {
+            KeyCode::Esc | KeyCode::Char('q' | 'V') => {
+                self.tags = None;
+                self.mode = Mode::Normal;
+                return;
+            }
+            KeyCode::Down | KeyCode::Char('j') => 1,
+            KeyCode::Up | KeyCode::Char('k') => -1,
+            KeyCode::Home | KeyCode::Char('g') => -(1 << 30),
+            KeyCode::End | KeyCode::Char('G') => 1 << 30,
+            KeyCode::Char('n') => {
+                let suggestion = next_tag(v.items.as_deref().unwrap_or(&[]));
+                self.open_input(InputKind::Tag);
+                self.input = suggestion;
+                return;
+            }
+            KeyCode::Char('f') | KeyCode::F(5) => return self.load_tags(),
+            _ => {
+                let Some((name, hash)) = picked else {
+                    self.log(Level::Info, "no tag highlighted (press n to make one)");
+                    return;
+                };
+                match key.code {
+                    KeyCode::Enter => self.start_diff(repo, hash, DiffKind::Commit, false, Mode::Tags),
+                    KeyCode::Char('p') => {
+                        if on_remote == Some(true) {
+                            self.log(Level::Info, format!("{name} is already on the remote"));
+                        } else {
+                            self.run_ops(vec![(repo, Op::PushTag(name))]);
+                        }
+                    }
+                    KeyCode::Char('d') => {
+                        let prompt = format!("delete tag {name} from this repository (it stays on the remote)?");
+                        self.ask(prompt, vec![(repo, Op::DeleteTag { name, remote: false })]);
+                    }
+                    KeyCode::Char('D') => {
+                        let prompt = format!("delete tag {name} here AND on the remote? others may already have it");
+                        self.ask(prompt, vec![(repo, Op::DeleteTag { name, remote: true })]);
+                    }
+                    KeyCode::Char(c @ ('r' | 'R')) => {
+                        let draft = c == 'R';
+                        let kind = if draft { "draft release" } else { "release" };
+                        match (slug, on_remote) {
+                            (None, _) => self.log(Level::Warn, "releases need a github.com remote"),
+                            (_, Some(false)) => self.log(Level::Warn, format!("{name} is not on the remote yet: push it first (p)")),
+                            (_, None) => self.log(Level::Warn, "still asking the remote which tags it has: try again in a moment"),
+                            _ if released => self.log(Level::Info, format!("{name} already has a release (o opens it)")),
+                            (Some(slug), Some(true)) => {
+                                let prompt = format!("create a GitHub {kind} for {name} with generated notes?");
+                                self.ask(prompt, vec![(repo, Op::Release { tag: name, slug, draft })]);
+                            }
+                        }
+                    }
+                    KeyCode::Char('o') => match (slug, released) {
+                        (Some(slug), true) => {
+                            let args = vec!["release".to_string(), "view".into(), name.clone(), "-R".into(), slug, "--web".into()];
+                            self.spawn_detached("gh", &args, &format!("release {name} opened in the browser"));
+                        }
+                        _ => self.log(Level::Info, format!("{name} has no GitHub release")),
+                    },
+                    _ => {}
+                }
+                return;
+            }
+        };
+        v.state.select(step(v.state.selected(), len, delta));
+    }
+
+    /// Makes a tag on HEAD from `name` or `name message` (a message makes it an annotated tag).
+    fn add_tag(&mut self, text: &str) {
+        let Some(repo) = self.tags.as_ref().map(|v| v.repo.clone()) else { return };
+        let text = text.trim();
+        let (name, message) = text.split_once(char::is_whitespace).map_or((text, ""), |(n, m)| (n, m.trim()));
+        if name.is_empty() {
+            return;
+        }
+        self.run_ops(vec![(repo, Op::Tag { name: name.to_string(), message: message.to_string() })]);
     }
 
     fn load_remotes(&mut self) {
@@ -2349,7 +2516,7 @@ impl App {
 
     fn open_input(&mut self, kind: InputKind) {
         self.input = if kind == InputKind::Search { self.search.clone() } else { String::new() };
-        self.input_back = if matches!(self.mode, Mode::Branches | Mode::Finder | Mode::Trees | Mode::Remotes) { self.mode } else { Mode::Normal };
+        self.input_back = if matches!(self.mode, Mode::Branches | Mode::Finder | Mode::Trees | Mode::Remotes | Mode::Tags) { self.mode } else { Mode::Normal };
         self.mode = Mode::Input(kind);
     }
 
@@ -2405,6 +2572,7 @@ impl App {
                 _ => self.log(Level::Info, "remote name unchanged"),
             },
             InputKind::Merge => self.op_selected(Op::Merge(text)),
+            InputKind::Tag => self.add_tag(&text),
         }
     }
 
@@ -2801,6 +2969,24 @@ fn folder_of(repo: &Path, file: &str) -> PathBuf {
         dir.pop();
     }
     if dir.starts_with(repo) { dir } else { repo.to_path_buf() }
+}
+
+/// The name to suggest for the next tag: the newest tag with its last number raised (`v0.2.0` -> `v0.2.1`),
+/// or `v0.1.0` when nothing looks like a version yet.
+fn next_tag(tags: &[Tag]) -> String {
+    for t in tags {
+        let (prefix, rest) = match t.name.strip_prefix('v') {
+            Some(r) => ("v", r),
+            None => ("", t.name.as_str()),
+        };
+        let parts: Vec<&str> = rest.split('.').collect();
+        let Some(last) = parts.last().and_then(|p| p.parse::<u64>().ok()) else { continue };
+        if parts.len() < 2 || parts[..parts.len() - 1].iter().any(|p| p.parse::<u64>().is_err()) {
+            continue;
+        }
+        return format!("{prefix}{}.{}", parts[..parts.len() - 1].join("."), last + 1);
+    }
+    "v0.1.0".to_string()
 }
 
 fn compare(sort: Sort, a: &Repo, b: &Repo) -> Ordering {
