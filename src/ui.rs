@@ -5,6 +5,8 @@
 //! layer on top (`hue`): every colored span keeps the weight and symbol it has without color, so
 //! turning colors off (`C`, `color = false` in config.lua or `NO_COLOR`) leaves the monochrome look unchanged.
 
+mod flows;
+
 use std::sync::{
     OnceLock,
     atomic::{AtomicBool, Ordering},
@@ -129,6 +131,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Finder => draw_finder(f, app),
         Mode::Project => draw_project(f, app),
         Mode::Tags => draw_tags(f, app),
+        Mode::Workflows => flows::draw_workflows(f, app),
+        Mode::WorkflowRun => {
+            flows::draw_workflows(f, app);
+            flows::draw_run_form(f, app);
+        }
         _ => {}
     }
     if app.mode == Mode::Terminal
@@ -885,6 +892,16 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
         return;
     }
+    if app.mode == Mode::Workflows {
+        let hints = [("↑↓", "move"), ("Enter", "run by hand"), ("o", "browser"), ("e", "edit"), ("f", "refresh"), ("Esc", "close")];
+        f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
+        return;
+    }
+    if app.mode == Mode::WorkflowRun {
+        let hints = [("↑↓", "field"), ("type", "edit"), ("Space ←→", "check / choose"), ("Enter", "run"), ("Esc", "back")];
+        f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
+        return;
+    }
     if app.mode == Mode::Tags {
         let hints = [("↑↓", "move"), ("Enter", "show the commit"), ("n", "new"), ("p", "push"), ("d", "delete"), ("D", "delete + remote"), ("r", "release"), ("R", "draft release"), ("o", "open release"), ("f", "refresh"), ("Esc", "close")];
         f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
@@ -1584,6 +1601,7 @@ fn draw_help(f: &mut Frame) {
         ("m z Z", "merge a branch (empty = upstream) / stash all changes / pop the stash"),
         ("d v b I", "diff of the file / commit log / branches / git init in any folder"),
         ("W", "worktrees and submodules: add / remove / go to / update"),
+        ("N", "GitHub workflows: run one by hand with its inputs"),
         ("V", "tags and releases: make / push / delete a tag, create a GitHub release"),
         ("O", "reflog: where HEAD has been; u undoes an entry, Enter moves the branch there"),
         ("D", "DELETE the repository from disk (asks you to type its name)"),

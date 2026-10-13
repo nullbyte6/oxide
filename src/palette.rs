@@ -29,6 +29,7 @@ pub const ENTRIES: &[Entry] = &[
     e("Manage branches", "b", 'b'),
     e("Worktrees and submodules", "W", 'W'),
     e("Tags and releases", "V", 'V'),
+    e("GitHub workflows: run one by hand", "N", 'N'),
     e("Merge a branch into the current one", "m", 'm'),
     e("GitHub issues of this repository", "i", 'i'),
     e("GitHub pull requests of this repository", "y", 'y'),

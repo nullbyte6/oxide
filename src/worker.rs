@@ -66,6 +66,8 @@ pub enum Msg {
     TagRemote { id: u64, result: Result<std::collections::HashSet<String>, String> },
     /// The GitHub releases by tag name (or why they are not known) for the request with the given id.
     Releases { id: u64, result: Result<std::collections::HashMap<String, github::Release>, String> },
+    /// The latest run of each workflow by name (or why that is not known) for the request with the given id.
+    WorkflowRuns { id: u64, result: Result<std::collections::HashMap<String, github::WorkflowRun>, String> },
     /// An operation finished.
     Op { path: PathBuf, label: &'static str, result: Result<String, String> },
 }
@@ -216,6 +218,13 @@ pub fn spawn_tags(repo: PathBuf, slug: Option<String>, id: u64, tx: Sender<Msg>)
             let _ = tx.send(Msg::Releases { id, result: github::releases(&slug) });
         });
     }
+}
+
+/// Loads the latest run of each workflow of a GitHub repository in the background.
+pub fn spawn_workflow_runs(slug: String, id: u64, tx: Sender<Msg>) {
+    thread::spawn(move || {
+        let _ = tx.send(Msg::WorkflowRuns { id, result: github::workflow_runs(&slug) });
+    });
 }
 
 /// Loads worktrees and submodules in the background.

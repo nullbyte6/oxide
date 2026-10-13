@@ -232,6 +232,25 @@ pub fn remote_url(repo: &Path) -> Option<String> {
     Some(url.trim().to_string()).filter(|u| !u.is_empty())
 }
 
+/// Whether a path of the repository is in step with the last commit.
+#[derive(Clone, Copy, PartialEq)]
+pub enum PathState {
+    Clean,
+    /// Not tracked by git (a new file).
+    Untracked,
+    /// Tracked, with uncommitted changes.
+    Changed,
+}
+
+/// The state of one path (relative to the repository) against the last commit.
+pub fn path_state(repo: &Path, rel: &str) -> PathState {
+    match run(repo, &["status", "--porcelain", "--", rel]) {
+        Ok(out) if out.trim().is_empty() => PathState::Clean,
+        Ok(out) if out.starts_with("??") => PathState::Untracked,
+        _ => PathState::Changed,
+    }
+}
+
 /// Name of the remote Oxide talks to: `origin`, else the first one.
 pub fn default_remote(repo: &Path) -> Option<String> {
     let remotes = run(repo, &["remote"]).ok()?;

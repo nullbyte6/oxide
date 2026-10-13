@@ -12,6 +12,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod flows;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::ListState;
 
@@ -20,7 +22,7 @@ use crate::{
     diff::{self, Diff},
     git::{self, Branch, Commit, DiffKind, Op, ReflogEntry, Remote, Tag, TreeItem, TreeKind},
     langs::Breakdown,
-    github::{self, Ci, Hits, Item, Kind, Release, Scope, State},
+    github::{self, Ci, Hits, Item, Kind, Release, Scope, State, WorkflowRun},
     license::{LICENSES, License},
     logger::{self, Level, Logger},
     marks::{Mark, Marks},
@@ -525,6 +527,10 @@ pub enum Mode {
     Project,
     /// The tags and releases (`App::tags`) are open.
     Tags,
+    /// The workflows (`App::workflows`) are open.
+    Workflows,
+    /// The form that starts a workflow (`App::run_form`) is open.
+    WorkflowRun,
     Help,
 }
 
@@ -582,6 +588,8 @@ pub struct App {
     pub trees: Option<TreesView>,
     pub remotes: Option<RemotesView>,
     pub tags: Option<TagsView>,
+    pub workflows: Option<flows::WorkflowsView>,
+    pub run_form: Option<flows::RunForm>,
     /// The remote an open input line is about (change URL, rename).
     remote_target: Option<String>,
     /// Why the next commit may be made with the wrong identity (shown next to the commit prompt).
@@ -720,6 +728,8 @@ impl App {
             trees: None,
             remotes: None,
             tags: None,
+            workflows: None,
+            run_form: None,
             remote_target: None,
             commit_warn: None,
             pending_msg: None,
@@ -948,6 +958,11 @@ impl App {
                         }
                     }
                 }
+                Msg::WorkflowRuns { id, result } => {
+                    if let Some(v) = self.workflows.as_mut().filter(|v| v.id == id) {
+                        v.runs = Some(result);
+                    }
+                }
                 Msg::TagRemote { id, result } => {
                     if let Some(v) = self.tags.as_mut().filter(|v| v.id == id) {
                         v.remote = Some(result);
@@ -1051,6 +1066,9 @@ impl App {
                     }
                     if self.trees.as_ref().is_some_and(|v| v.main() == path || v.repo == path) {
                         self.load_trees();
+                    }
+                    if self.workflows.as_ref().is_some_and(|v| v.repo == path) {
+                        self.load_workflows(); // a run was started or a workflow written
                     }
                     if self.tags.as_ref().is_some_and(|v| v.repo == path) {
                         self.load_tags(); // a tag was made, pushed or deleted, or a release made
@@ -1283,6 +1301,8 @@ impl App {
             Mode::Finder => self.on_finder_key(key),
             Mode::Project => self.on_project_key(key),
             Mode::Tags => self.on_tags_key(key),
+            Mode::Workflows => self.on_workflows_key(key),
+            Mode::WorkflowRun => self.on_run_key(key),
             Mode::Terminal => {}
             Mode::Normal => self.on_normal_key(key),
         }
@@ -1323,6 +1343,7 @@ impl App {
             KeyCode::Char('O') => self.open_reflog(),
             KeyCode::Char('W') => self.open_trees(),
             KeyCode::Char('V') => self.open_tags(),
+            KeyCode::Char('N') => self.open_workflows(),
             KeyCode::Char('E') => self.open_amend(),
             KeyCode::Char('I') => self.open_init(),
             KeyCode::Char('i') => self.open_gh(Kind::Issues),
