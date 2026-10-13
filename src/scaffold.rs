@@ -38,6 +38,17 @@ pub struct Variant {
     /// What it does in a few words, shown in the menu.
     pub note: &'static str,
     pub steps: &'static [Step],
+    /// Commands (like `cargo build`) that prove the finished project works, run one after another inside it by
+    /// `oxide --check-setups`. They may use the same placeholders as steps. Empty: the setup itself is the check.
+    pub check: &'static [&'static str],
+}
+
+impl Variant {
+    /// This variant with the commands that check it.
+    const fn check(mut self, commands: &'static [&'static str]) -> Variant {
+        self.check = commands;
+        self
+    }
 }
 
 /// What a language calls the name the menu asks for, which decides how it is checked.
@@ -140,7 +151,7 @@ pub struct Lang {
 }
 
 const fn v(name: &'static str, note: &'static str, steps: &'static [Step]) -> Variant {
-    Variant { name, note, steps }
+    Variant { name, note, steps, check: &[] }
 }
 
 /// Every language in the menu: the built-in ones, then those of `config.lua` (one with the name of a built-in
@@ -171,8 +182,8 @@ const BUILTIN: &[Lang] = &[
         ignore: "",
         package: None,
         variants: &[
-            v("Binary", "cargo init", &[Run("cargo init --name {pkg}")]),
-            v("Library", "cargo init --lib", &[Run("cargo init --lib --name {pkg}")]),
+            v("Binary", "cargo init", &[Run("cargo init --name {pkg}")]).check(&["cargo build"]),
+            v("Library", "cargo init --lib", &[Run("cargo init --lib --name {pkg}")]).check(&["cargo build"]),
         ],
     },
     Lang {
@@ -187,8 +198,8 @@ const BUILTIN: &[Lang] = &[
                 File("src/{package}/__init__.py", ""),
                 File("src/{package}/main.py", PY_MAIN),
                 Dir("tests"),
-            ]),
-            v("uv", "uv init --package", &[Run("uv init --package --name {package}"), Dir("tests")]),
+            ]).check(&["python3 -m compileall -q src"]),
+            v("uv", "uv init --package", &[Run("uv init --package --name {package}"), Dir("tests")]).check(&["python3 -m compileall -q src"]),
         ],
     },
     Lang {
@@ -197,9 +208,9 @@ const BUILTIN: &[Lang] = &[
         ignore: "",
         package: None,
         variants: &[
-            v("npm", "npm init -y, src/", &[Run("npm init -y"), File("src/index.js", JS_MAIN)]),
-            v("pnpm", "pnpm init, src/", &[Run("pnpm init"), File("src/index.js", JS_MAIN)]),
-            v("Bun", "bun init -y", &[Run("bun init -y")]),
+            v("npm", "npm init -y, src/", &[Run("npm init -y"), File("src/index.js", JS_MAIN)]).check(&["node src/index.js"]),
+            v("pnpm", "pnpm init, src/", &[Run("pnpm init"), File("src/index.js", JS_MAIN)]).check(&["node src/index.js"]),
+            v("Bun", "bun init -y", &[Run("bun init -y")]).check(&["bun run index.ts"]),
         ],
     },
     Lang {
@@ -213,8 +224,8 @@ const BUILTIN: &[Lang] = &[
                 Run("npm install --save-dev typescript @types/node"),
                 File("tsconfig.json", TS_CONFIG),
                 File("src/index.ts", TS_MAIN),
-            ]),
-            v("Bun", "bun init -y (TypeScript by default)", &[Run("bun init -y")]),
+            ]).check(&["npx tsc --noEmit"]),
+            v("Bun", "bun init -y (TypeScript by default)", &[Run("bun init -y")]).check(&["bun run index.ts"]),
         ],
     },
     Lang {
@@ -226,7 +237,7 @@ const BUILTIN: &[Lang] = &[
             Run("go mod init {package}"),
             File("cmd/{pkg}/main.go", GO_MAIN),
             Dir("internal"),
-        ])],
+        ]).check(&["go build ./..."])],
     },
     Lang {
         name: "Java",
@@ -239,21 +250,21 @@ const BUILTIN: &[Lang] = &[
                 File("src/main/java/{package_path}/Main.java", JAVA_MAIN),
                 Dir("src/main/java/{package_path}"),
                 Dir("src/test/java/{package_path}"),
-            ]),
+            ]).check(&["mvn -q -B compile"]),
             v("Gradle (Groovy)", "build.gradle, settings.gradle", &[
                 File("settings.gradle", "rootProject.name = '{slug}'\n"),
                 File("build.gradle", JAVA_GRADLE),
                 File("src/main/java/{package_path}/Main.java", JAVA_MAIN),
                 Dir("src/main/java/{package_path}"),
                 Dir("src/test/java/{package_path}"),
-            ]),
+            ]).check(&["gradle -q --no-daemon compileJava"]),
             v("Gradle (Kotlin DSL)", "build.gradle.kts, settings.gradle.kts", &[
                 File("settings.gradle.kts", "rootProject.name = \"{slug}\"\n"),
                 File("build.gradle.kts", JAVA_GRADLE_KTS),
                 File("src/main/java/{package_path}/Main.java", JAVA_MAIN),
                 Dir("src/main/java/{package_path}"),
                 Dir("src/test/java/{package_path}"),
-            ]),
+            ]).check(&["gradle -q --no-daemon compileJava"]),
         ],
     },
     Lang {
@@ -267,7 +278,7 @@ const BUILTIN: &[Lang] = &[
             File("src/main/kotlin/{package_path}/Main.kt", KOTLIN_MAIN),
             Dir("src/main/kotlin/{package_path}"),
             Dir("src/test/kotlin/{package_path}"),
-        ])],
+        ]).check(&["gradle -q --no-daemon compileKotlin"])],
     },
     Lang {
         name: "C",
@@ -278,7 +289,7 @@ const BUILTIN: &[Lang] = &[
             File("Makefile", C_MAKEFILE),
             File("src/main.c", C_MAIN),
             Dir("include"),
-        ])],
+        ]).check(&["make"])],
     },
     Lang {
         name: "C++",
@@ -290,12 +301,12 @@ const BUILTIN: &[Lang] = &[
                 File("CMakeLists.txt", CPP_CMAKE),
                 File("src/main.cpp", CPP_MAIN),
                 Dir("include"),
-            ]),
+            ]).check(&["cmake -S . -B build", "cmake --build build"]),
             v("Makefile", "Makefile, src/, include/", &[
                 File("Makefile", CPP_MAKEFILE),
                 File("src/main.cpp", CPP_MAIN),
                 Dir("include"),
-            ]),
+            ]).check(&["make"]),
         ],
     },
     Lang {
@@ -307,11 +318,11 @@ const BUILTIN: &[Lang] = &[
             v("Console", "{slug}.csproj, Program.cs", &[
                 File("{slug}.csproj", CSHARP_EXE),
                 File("src/Program.cs", CSHARP_MAIN),
-            ]),
+            ]).check(&["dotnet build"]),
             v("Class library", "{slug}.csproj, Class1.cs", &[
                 File("{slug}.csproj", CSHARP_LIB),
                 File("src/Class1.cs", CSHARP_CLASS),
-            ]),
+            ]).check(&["dotnet build"]),
         ],
     },
     Lang {
@@ -323,7 +334,7 @@ const BUILTIN: &[Lang] = &[
             File("composer.json", PHP_COMPOSER),
             File("src/Greeter.php", PHP_CLASS),
             Dir("tests"),
-        ])],
+        ]).check(&["php -l src/Greeter.php"])],
     },
     Lang {
         name: "Ruby",
@@ -334,7 +345,7 @@ const BUILTIN: &[Lang] = &[
             Run("bundle init"),
             File("lib/{package}.rb", RUBY_MAIN),
             Dir("spec"),
-        ])],
+        ]).check(&["ruby -c lib/{package}.rb"])],
     },
     Lang {
         name: "Swift",
@@ -342,8 +353,8 @@ const BUILTIN: &[Lang] = &[
         ignore: "",
         package: Some(Package { kind: PackageKind::Pascal, suggest: "{Pascal}" }),
         variants: &[
-            v("Executable", "swift package init", &[Run("swift package init --type executable --name {package}")]),
-            v("Library", "swift package init --type library", &[Run("swift package init --type library --name {package}")]),
+            v("Executable", "swift package init", &[Run("swift package init --type executable --name {package}")]).check(&["swift build"]),
+            v("Library", "swift package init --type library", &[Run("swift package init --type library --name {package}")]).check(&["swift build"]),
         ],
     },
     Lang {
@@ -356,7 +367,7 @@ const BUILTIN: &[Lang] = &[
             File("bin/{package}.dart", DART_MAIN),
             File("lib/{package}.dart", DART_LIB),
             Dir("test"),
-        ])],
+        ]).check(&["dart analyze"])],
     },
     Lang {
         name: "Lua",
@@ -367,28 +378,28 @@ const BUILTIN: &[Lang] = &[
             File("src/main.lua", LUA_MAIN),
             File("src/{package}.lua", LUA_MODULE),
             Dir("tests"),
-        ])],
+        ]).check(&["lua src/main.lua"])],
     },
     Lang {
         name: "Zig",
         key: "zig",
         ignore: "",
         package: None,
-        variants: &[v("zig init", "zig init", &[Run("zig init")])],
+        variants: &[v("zig init", "zig init", &[Run("zig init")]).check(&["zig build"])],
     },
     Lang {
         name: "Elixir",
         key: "elixir",
         ignore: "",
         package: Some(Package { kind: PackageKind::Snake, suggest: "{pkg}" }),
-        variants: &[v("Mix", "mix new", &[Run("mix new . --app {package}")])],
+        variants: &[v("Mix", "mix new", &[Run("mix new . --app {package}")]).check(&["mix compile"])],
     },
     Lang {
         name: "Haskell",
         key: "haskell",
         ignore: "",
         package: Some(Package { kind: PackageKind::Hyphen, suggest: "{slug}" }),
-        variants: &[v("Cabal", "cabal init, app/", &[Run("cabal init --non-interactive --exe --package-name={package}")])],
+        variants: &[v("Cabal", "cabal init, app/", &[Run("cabal init --non-interactive --exe --package-name={package}")]).check(&["cabal build"])],
     },
     Lang {
         name: "Scala",
@@ -401,7 +412,7 @@ const BUILTIN: &[Lang] = &[
             File("src/main/scala/{package_path}/Main.scala", SCALA_MAIN),
             Dir("src/main/scala/{package_path}"),
             Dir("src/test/scala/{package_path}"),
-        ])],
+        ]).check(&["sbt -batch compile"])],
     },
     Lang {
         name: "R",
@@ -412,7 +423,7 @@ const BUILTIN: &[Lang] = &[
             File("DESCRIPTION", R_DESCRIPTION),
             File("NAMESPACE", "exportPattern(\"^[[:alpha:]]+\")\n"),
             File("R/hello.R", R_MAIN),
-        ])],
+        ]).check(&["Rscript R/hello.R"])],
     },
     Lang {
         name: "Julia",
@@ -423,7 +434,7 @@ const BUILTIN: &[Lang] = &[
             File("Project.toml", JULIA_PROJECT),
             File("src/{package}.jl", JULIA_MAIN),
             Dir("test"),
-        ])],
+        ]).check(&["julia --project src/{package}.jl"])],
     },
     Lang {
         name: "Shell",
@@ -434,7 +445,7 @@ const BUILTIN: &[Lang] = &[
             File("bin/{slug}", SHELL_MAIN),
             Run("chmod +x bin/{slug}"),
             Dir("lib"),
-        ])],
+        ]).check(&["bash bin/{slug}"])],
     },
     Lang {
         name: "Nim",
@@ -445,7 +456,7 @@ const BUILTIN: &[Lang] = &[
             File("{package}.nimble", NIM_NIMBLE),
             File("src/{package}.nim", NIM_MAIN),
             Dir("tests"),
-        ])],
+        ]).check(&["nim check src/{package}.nim"])],
     },
     Lang {
         name: "Perl",
@@ -457,7 +468,7 @@ const BUILTIN: &[Lang] = &[
             File("lib/{package_path}.pm", PERL_MODULE),
             File("cpanfile", "# requires 'Some::Module';\n"),
             Dir("t"),
-        ])],
+        ]).check(&["perl script/main.pl"])],
     },
     Lang {
         name: "Clojure",
@@ -468,7 +479,7 @@ const BUILTIN: &[Lang] = &[
             File("deps.edn", CLJ_DEPS),
             File("src/{package_path}.clj", CLJ_MAIN),
             Dir("test"),
-        ])],
+        ]).check(&["clojure -M:run"])],
     },
 ];
 

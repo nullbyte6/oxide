@@ -158,7 +158,8 @@ fn keep(s: String) -> &'static str {
 }
 
 /// One way to set a language up, from a table with `run` (command lines), `dirs` (directories) and
-/// `files` (path -> contents); `note` is the line shown in the menu. They are done in that order.
+/// `files` (path -> contents); `note` is the line shown in the menu. They are done in that order. `check` lists
+/// commands that prove the finished project works (see `Variant::check`).
 fn read_variant(t: &Table, name: String) -> Result<Variant, String> {
     let mut steps: Vec<Step> = strings(t, "run").into_iter().map(|c| Step::Run(keep(c))).collect();
     steps.extend(strings(t, "dirs").into_iter().map(|d| Step::Dir(keep(d))));
@@ -171,7 +172,8 @@ fn read_variant(t: &Table, name: String) -> Result<Variant, String> {
         return Err(format!("variant {name} needs run, dirs or files"));
     }
     let note = t.get::<Option<String>>("note").ok().flatten().unwrap_or_else(|| "your own setup".to_string());
-    Ok(Variant { name: keep(name), note: keep(note), steps: steps.leak() })
+    let check: Vec<&'static str> = strings(t, "check").into_iter().map(keep).collect();
+    Ok(Variant { name: keep(name), note: keep(note), steps: steps.leak(), check: check.leak() })
 }
 
 /// The `languages` option: a list of tables, each with `name`, optionally `ignore` (`.gitignore` lines),
