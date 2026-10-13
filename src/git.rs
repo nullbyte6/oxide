@@ -99,6 +99,8 @@ pub enum Op {
     RemoteFetch(String),
     /// Apply one hunk of a diff to the index: stage it, or with `reverse` unstage it.
     Hunk { patch: String, reverse: bool },
+    /// Start a workflow by hand (`gh workflow run`) on a branch or tag, with its inputs.
+    Dispatch { slug: String, file: String, git_ref: String, inputs: Vec<(String, String)> },
     /// Undo the last project setup recorded in the repository (see `setup_record`).
     UndoSetup,
     /// Create a tag on HEAD; a message makes it an annotated tag.
@@ -150,6 +152,7 @@ impl Op {
             Op::Hunk { reverse: true, .. } => "unstage hunk",
             Op::Setup { .. } => "set up",
             Op::UndoSetup => "undo setup",
+            Op::Dispatch { .. } => "workflow run",
             Op::Tag { .. } => "tag",
             Op::PushTag(_) => "push tag",
             Op::DeleteTag { .. } => "delete tag",
@@ -787,6 +790,20 @@ pub fn perform(repo: &Path, op: &Op) -> Result<String, String> {
         Op::Commit(msg) => run_all(repo, &["commit", "-m", msg]),
         Op::Setup { plan, commit } => setup(repo, plan, *commit),
         Op::UndoSetup => undo_setup(repo),
+        Op::Dispatch { file, git_ref, .. } if file.is_empty() || file.starts_with('-') || git_ref.starts_with('-') => {
+            Err(format!("invalid workflow '{file}' or ref '{git_ref}'"))
+        }
+        Op::Dispatch { slug, file, git_ref, inputs } => {
+            let pairs: Vec<String> = inputs.iter().map(|(k, v)| format!("{k}={v}")).collect();
+            let mut args = vec!["workflow", "run", file.as_str(), "-R", slug.as_str()];
+            if !git_ref.is_empty() {
+                args.extend(["--ref", git_ref.as_str()]);
+            }
+            for p in &pairs {
+                args.extend(["-f", p.as_str()]);
+            }
+            crate::github::gh_all(Some(repo), &args)
+        }
         Op::Tag { name, .. } | Op::PushTag(name) | Op::DeleteTag { name, .. } | Op::Release { tag: name, .. } if name.is_empty() || name.starts_with('-') || name.contains(char::is_whitespace) => {
             Err(format!("invalid tag name '{name}'"))
         }

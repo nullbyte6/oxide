@@ -217,6 +217,31 @@ pub fn list(slug: &str, kind: Kind, state: State) -> Result<Vec<Item>, String> {
         .collect())
 }
 
+/// The latest run of a workflow.
+pub struct WorkflowRun {
+    /// `completed`, `in_progress`, `queued` ...
+    pub status: String,
+    /// `success`, `failure`, `cancelled` ...; empty while it is running.
+    pub conclusion: String,
+    /// Time since it started, e.g. `3h`.
+    pub age: String,
+    pub branch: String,
+}
+
+/// The latest run of every workflow that ran lately (from the newest 100 runs), by workflow name.
+pub fn workflow_runs(slug: &str) -> Result<std::collections::HashMap<String, WorkflowRun>, String> {
+    let jq = r#".[]|[.workflowName,.status,(.conclusion//""),.createdAt,.headBranch]|@tsv"#;
+    let out = gh(None, &["run", "list", "-R", slug, "--limit", "100", "--json", "workflowName,status,conclusion,createdAt,headBranch", "--jq", jq])?;
+    let mut runs = std::collections::HashMap::new();
+    for l in out.lines() {
+        let f: Vec<String> = l.split('\t').map(untsv).collect();
+        let [name, status, conclusion, created, branch] = &f[..] else { continue };
+        // The list is newest first, so the first run of a workflow is its latest.
+        runs.entry(name.clone()).or_insert(WorkflowRun { status: status.clone(), conclusion: conclusion.clone(), age: ago(created), branch: branch.clone() });
+    }
+    Ok(runs)
+}
+
 /// A GitHub release.
 pub struct Release {
     pub draft: bool,

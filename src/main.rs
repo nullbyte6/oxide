@@ -19,6 +19,7 @@ mod syntax;
 mod term;
 mod ui;
 mod watch;
+mod workflow;
 mod worker;
 
 use std::{
