@@ -142,16 +142,26 @@ the source branch instead of labels and mark drafts `◌`, approved `✓` and ch
 #### Finding and cloning repositories
 
 `S` asks for search terms (the same syntax as GitHub's search, e.g. `tui language:rust`); an empty search
-lists your own repositories, private ones included. Results show the stars, language, age of the last
-push, `private` / `fork` tags and the description, and repositories you already have locally are marked
-`cloned`.
+lists your own repositories, private ones included. A prefix narrows what is searched:
+
+| Search | Finds |
+| --- | --- |
+| `user:torvalds` | Users and organizations |
+| `repo:oxide` | Repositories whose **name** matches |
+| `file:Cargo.toml ratatui` | Files with that name in any repository; further words must appear inside the file |
+
+Results come 20 per page so the list stays fast (GitHub reaches at most the first 1000 matches). The title
+shows the page and the number of matches. Repository rows show the stars, language, age of the last
+push, `private` / `fork` tags and the description; file rows show the repository and the path. Repositories
+you already have locally are marked `cloned`.
 
 | Key | Action |
 | --- | --- |
-| `Enter` | Clone the repository: the prompt starts with `clone_dir/<name>`, edit it freely (relative paths start from `clone_dir`). The new repository is added to the list and selected. On one you already have, Enter jumps to the local copy instead |
+| `Enter` | On a repository or file: clone the repository (the prompt starts with `clone_dir/<name>`, edit it freely; relative paths start from `clone_dir`) and add it to the list. On one you already have, jump to the local copy instead. On a user: list their repositories, newest work first |
+| `→` `n` `]` / `←` `p` `[` | Next / previous page |
 | `/` or `S` | New search |
-| `o` | Open the highlighted repository in the browser |
-| `r` | Reload |
+| `o` | Open the highlighted user, repository or file in the browser |
+| `r` | Reload the page |
 | `Esc`, `q` | Close |
 
 The clone uses the protocol configured in `gh` (ssh or https). Like `git init`, a clone outside the scan

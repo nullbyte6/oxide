@@ -45,6 +45,7 @@ All notable changes to Oxide are recorded here, newest version first.
 - Add language statistics: a `langs` line in the details panel and a focusable Languages pane (`Tab` is now repositories → languages → changes) with each language's share, size, file count and GitHub colour, counted locally by bytes from `git ls-tree` with a built-in extension table (`src/langs.rs`), cached until HEAD moves.
 - Update the `langs` line in the details panel to show only the colored (or shaded) bar, without language names or percentages; those stay in the Languages pane.
 - Add a remotes view (`r`): list a repository's remotes with fetch/push URLs, add one (a lone URL becomes `origin`), change a URL, rename, remove (with confirmation) and fetch a single remote; the repository row, owner class and GitHub slug update right away.
+- Add search prefixes to the GitHub finder (`S`): `user:` finds users and organizations (`Enter` lists their repositories), `repo:` matches repository names only and `file:` finds files by name in any repository; every search is paged 20 results at a time (`←` `→`, `n` `p`, `[` `]`) with the page and match count in the title.
 
 ### Fixed
 - Fix the key bar losing its last keys on narrow terminals: hints are now dropped from the middle by importance, always keeping `h`, `?` and `q`.
