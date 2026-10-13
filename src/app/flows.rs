@@ -126,7 +126,7 @@ impl App {
                     },
                     KeyCode::Char('e') => {
                         let target = repo.join(workflow::DIR).join(&w.file);
-                        self.launch = Some(Launch::Browse { repo, target });
+                        self.browse(repo, target);
                     }
                     _ => {}
                 }

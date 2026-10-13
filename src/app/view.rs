@@ -341,37 +341,21 @@ impl App {
 
 impl App {
     /// The editor command line: `editor` of `config.lua`, else `$VISUAL`, `$EDITOR`, else nvim, vim or vi.
-    fn editor_line(&self) -> String {
+    pub(super) fn editor_line(&self) -> String {
         if self.cfg.editor.is_empty() { default_editor() } else { self.cfg.editor.clone() }
     }
 
-    /// Opens `file` of `repo` in the editor at `line`, on a terminal inside Oxide: the frame and the key bar stay
-    /// where they are. The screen it was started from comes back when the editor ends or `Ctrl+T` hides it; an
-    /// editor already open on the file is shown again.
+    /// Opens `file` of `repo` in the editor at `line`, inside Oxide (see `open_session`); an editor already open on
+    /// the file is shown again.
     pub(super) fn start_edit(&mut self, repo: PathBuf, file: String, line: usize) {
         let path = repo.join(&file);
         if !path.is_file() {
             return self.log(Level::Warn, format!("{file} does not exist in the working tree"));
         }
-        let back = self.mode;
-        let i = match self.terms.iter().position(|t| t.repo == repo && t.file.as_deref() == Some(&file)) {
-            Some(i) => i,
-            None => {
-                let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-                let command = editor_command(&path, line, &self.editor_line());
-                match Term::spawn(&repo, &repo, Some(command), rows.saturating_sub(3), cols.saturating_sub(2)) {
-                    Ok(mut t) => {
-                        t.file = Some(file);
-                        self.terms.push(t);
-                        self.terms.len() - 1
-                    }
-                    Err(e) => return self.log(Level::Error, e),
-                }
-            }
-        };
-        self.terms[i].back = back;
-        self.term = Some(i);
-        self.mode = Mode::Terminal;
+        let name = repo.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        let session = Session { id: format!("edit:{file}"), title: format!("Editor · {name}/{file}"), kind: "editor" };
+        let command = editor_command(&path, line, &self.editor_line());
+        self.open_session(repo, session, command);
     }
 
     /// `Ctrl+E` on the dashboard: edits the file highlighted in the changes list.

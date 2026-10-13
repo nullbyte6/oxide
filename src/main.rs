@@ -134,13 +134,6 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
         {
             app.on_key(key);
         }
-        // yazi needs the whole terminal: leave the dashboard, run it, come back.
-        if let Some(launch) = app.launch.take() {
-            ratatui::restore();
-            let result = launch.run();
-            *terminal = ratatui::try_init()?;
-            app.launch_done(launch.repo(), result);
-        }
         app.drain();
         app.background();
         app.tick = app.tick.wrapping_add(1);

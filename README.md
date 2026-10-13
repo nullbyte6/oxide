@@ -28,7 +28,7 @@ screen, and lets you stage, commit, push, pull, fetch and merge without leaving 
 - **GitHub** (needs the [`gh`](https://cli.github.com) CLI, logged in): browse a repository's issues and pull requests, read them, diff and check out pull requests, find repositories (yours or anyone's) and clone them, and open things in your browser.
 - **Files and editing**: `Ctrl+P` finds any file of the repository by name (fuzzy, changed files first) and opens it in a read-only viewer with line numbers, highlighting, search and go to line; `e` opens the file in your editor at the cursor line (`Ctrl+E` on the highlighted changed file, `e` in the diff), the editor runs inside Oxide, in a pane under its frame and above its key bar, and the screen you came from comes back, reloaded, when the editor exits.
 - **Tasks**: `M` lists the build, test, lint and run commands the repository offers (found from `Cargo.toml`, `package.json`, `go.mod`, `Makefile`, `justfile`, Gradle, Maven, CMake, .NET, Python and others, plus your own from `config.lua`), runs the one you pick and streams its output; error locations (`src/main.rs:12:5`, Python tracebacks ...) can be stepped through with `n` and opened in the viewer or your editor.
-- **Jump out**: open the selected file or repository in yazi or the file manager.
+- **Jump out**: `e` opens the selected file or repository in yazi, inside Oxide (its frame and key bar stay; `Ctrl+T` hides it while it keeps running), and `o` in the desktop file manager.
 - **New project**: `K` in an empty repository opens a menu to set it up for 25 languages (Rust, Python, JavaScript, TypeScript, Go, Java, Kotlin, C, C++, C#, PHP, Ruby, Swift, Dart, Lua, Zig, Elixir, Haskell, Scala, R, Julia, Shell, Nim, Perl, Clojure): pick the language (type to filter), the build tool where there is a choice (Maven by default for Java), a license (11 offered, holder and year filled in) and review the exact commands and files before anything is done; the setup then runs in the background, with an optional first commit. *Other / manual…* opens the embedded terminal instead.
 - **Embedded terminal**: `t` / `T` opens a shell inside Oxide, in the selected repository, on a pseudo-terminal with colors, full-screen programs and scrollback; `Ctrl+T` hides it and the shell keeps running.
 - **Always current**: Oxide watches every repository's `.git` and the selected repository's working tree (Linux inotify, no extra dependency), so commits, checkouts and edits made elsewhere show up on their own; an optional timer fetches every repository.
@@ -112,7 +112,7 @@ oxide [OPTIONS] [PATH...]
 | `S` | Find GitHub repositories and clone them (see below) |
 | `Ctrl+P` | Find a file of the selected repository by name and read it (see *File finder and viewer* below) |
 | `Ctrl+E` | Edit the highlighted changed file in your editor, at its first line (`editor` in `config.lua`, else `$VISUAL` / `$EDITOR`, else nvim, vim or vi, whichever is installed) |
-| `e` | Open [yazi](https://yazi-rs.github.io) in the repository, with the highlighted file revealed when the changes list is focused. Open files from yazi with your usual opener (e.g. nvim). Without yazi installed it falls back to `$VISUAL` / `$EDITOR` |
+| `e` | Open [yazi](https://yazi-rs.github.io) inside Oxide, in the repository, with the highlighted file revealed when the changes list is focused. Files you open from yazi use your usual opener (e.g. nvim, which then runs inside yazi). `Ctrl+T` hides it, quitting it returns here, and `e` shows a hidden one again. Without yazi installed the editor opens the file or folder instead |
 | `M` | Tasks of the selected repository: run a build, test, lint or any other command and watch its output (see *Tasks* below) |
 | `K` | New project in an empty repository: language, build tool, license, then a plan to confirm (`c` toggles a first commit, `Esc` goes back a page) |
 | `X` | Undo the last project setup of the selected repository (see "New project") |
@@ -333,7 +333,7 @@ says so and offers to create one.
 | `Enter` / `r` | Start the highlighted workflow by hand (`gh workflow run`) |
 | `n` | Write a new workflow with the wizard (below) |
 | `o` | Open it on GitHub |
-| `e` | Edit the file (yazi, or your editor) |
+| `e` | Edit the file (yazi, inside Oxide, or your editor) |
 | `f` | Read the files and ask GitHub for the latest runs again |
 
 **Starting a workflow.** The form has the branch or tag to run (the repository's current branch to begin with)

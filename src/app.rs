@@ -37,7 +37,7 @@ use crate::{
     palette,
     repo::{Health, Owner, Repo},
     scaffold::{self, PackageKind, Plan, langs},
-    term::Term,
+    term::{Session, Term},
     watch::Watcher,
     worker::{self, Msg},
 };
@@ -117,33 +117,6 @@ impl Sort {
     }
 }
 
-/// An external program that needs the terminal; the event loop suspends the dashboard to run it.
-pub enum Launch {
-    /// The yazi file manager inside `repo`, with `target` revealed. Files are then opened from yazi,
-    /// with whatever program its rules choose (e.g. nvim). Without yazi, `$VISUAL` / `$EDITOR` opens `target`.
-    Browse { repo: PathBuf, target: PathBuf },
-}
-
-impl Launch {
-    pub fn repo(&self) -> &Path {
-        match self {
-            Launch::Browse { repo, .. } => repo,
-        }
-    }
-
-    /// Runs the program in the foreground and waits for it.
-    pub fn run(&self) -> Result<(), String> {
-        let Launch::Browse { repo, target } = self;
-        match Command::new("yazi").arg(target).current_dir(repo).status() {
-            Ok(_) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                run_editor(repo, target).map_err(|e| format!("yazi is not installed, and the editor failed: {e}"))
-            }
-            Err(e) => Err(format!("cannot run yazi: {e}")),
-        }
-    }
-}
-
 /// The program and arguments that open `path` at `line` (1-based) for the editor command line `spec`. `{file}` and
 /// `{line}` in the arguments are replaced; without them the arguments the editor needs for a line are added from
 /// its name (`+12 file` for vi, nano, emacs ...; `file:12` for helix, zed, sublime; `-g file:12` for VS Code).
@@ -171,20 +144,6 @@ fn editor_command(path: &Path, line: usize, spec: &str) -> (String, Vec<String>)
 fn default_editor() -> String {
     let set = ["VISUAL", "EDITOR"].iter().find_map(|v| std::env::var(v).ok().filter(|s| !s.trim().is_empty()));
     set.or_else(|| ["nvim", "vim"].iter().find(|p| scaffold::on_path(p)).map(|p| p.to_string())).unwrap_or_else(|| "vi".to_string())
-}
-
-/// Fallback when yazi is missing: the default editor on `target`.
-fn run_editor(repo: &Path, target: &Path) -> Result<(), String> {
-    let line = default_editor();
-    let mut parts = line.split_whitespace().map(str::to_string);
-    let program = parts.next().unwrap_or_else(|| "vi".to_string());
-    Command::new(&program)
-        .args(parts)
-        .arg(target)
-        .current_dir(repo)
-        .status()
-        .map(|_| ())
-        .map_err(|e| format!("cannot run {program}: {e}"))
 }
 
 /// State of the command palette.
@@ -727,7 +686,6 @@ pub struct App {
     /// Automatic CI refreshes are on (turned off when `gh` is unusable, until `w` is pressed).
     ci_auto: bool,
     /// A terminal program requested by the user; taken and run by the event loop.
-    pub launch: Option<Launch>,
     /// Embedded shells, one per repository. They keep running while hidden.
     pub terms: Vec<Term>,
     /// The shell in `terms` that is shown while in `Mode::Terminal`.
@@ -855,7 +813,6 @@ impl App {
             ci: HashMap::new(),
             ci_busy: false,
             ci_auto: cfg_ci,
-            launch: None,
             terms: Vec::new(),
             term: None,
             logger: Logger::open(),
@@ -2857,7 +2814,45 @@ impl App {
         let file = if self.focus == Focus::Files { self.file_state.selected().and_then(|i| r.files.get(i)) } else { None };
         // A deleted file no longer exists to reveal; fall back to the repository folder.
         let target = file.map(|f| r.path.join(&f.path)).filter(|p| p.exists()).unwrap_or_else(|| r.path.clone());
-        self.launch = Some(Launch::Browse { repo: r.path.clone(), target });
+        self.browse(r.path.clone(), target);
+    }
+
+    /// Shows the file manager of `repo` inside Oxide, with `target` revealed. Files are then opened from yazi, with
+    /// whatever program its rules choose (e.g. nvim, which runs inside yazi). Without yazi the editor opens `target`.
+    /// A file manager already open for the repository is shown again.
+    pub(super) fn browse(&mut self, repo: PathBuf, target: PathBuf) {
+        let command = if scaffold::on_path("yazi") {
+            ("yazi".to_string(), vec![target.display().to_string()])
+        } else {
+            editor_command(&target, 1, &self.editor_line())
+        };
+        let name = repo.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        let session = Session { id: "yazi".to_string(), title: format!("Files · {name}"), kind: "file manager" };
+        self.open_session(repo, session, command);
+    }
+
+    /// Shows the program `command` in a pane of Oxide, on a terminal of its own: the frame and the key bar stay
+    /// around it, and the screen it was started from comes back when it ends or `Ctrl+T` hides it. A session with
+    /// the same id that is already running is shown again instead.
+    pub(super) fn open_session(&mut self, repo: PathBuf, session: Session, command: (String, Vec<String>)) {
+        let back = self.mode;
+        let i = match self.terms.iter().position(|t| t.repo == repo && t.session.as_ref().is_some_and(|s| s.id == session.id)) {
+            Some(i) => i,
+            None => {
+                let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+                match Term::spawn(&repo, &repo, Some(command), rows.saturating_sub(3), cols.saturating_sub(2)) {
+                    Ok(mut t) => {
+                        t.session = Some(session);
+                        self.terms.push(t);
+                        self.terms.len() - 1
+                    }
+                    Err(e) => return self.log(Level::Error, e),
+                }
+            }
+        };
+        self.terms[i].back = back;
+        self.term = Some(i);
+        self.mode = Mode::Terminal;
     }
 
     /// Opens the new-project menu for the selected repository, which must be empty.
@@ -3036,7 +3031,7 @@ impl App {
     fn open_terminal_in(&mut self, dir: Option<PathBuf>) {
         let Some(path) = self.selected().map(|r| r.path.clone()) else { return };
         let dir = dir.unwrap_or_else(|| path.clone());
-        let i = match self.terms.iter().position(|t| t.repo == path && t.dir == dir && t.file.is_none()) {
+        let i = match self.terms.iter().position(|t| t.repo == path && t.dir == dir && t.session.is_none()) {
             Some(i) => i,
             None => {
                 // The size is corrected to the real panel by the first frame.
@@ -3073,20 +3068,20 @@ impl App {
     /// Leaves the terminal for the screen it was opened from (the dashboard for a shell); the program keeps
     /// running. Its commands may have changed the repository.
     fn hide_terminal(&mut self) {
-        let shown = self.term.take().and_then(|i| self.terms.get(i)).map(|t| (t.repo.clone(), t.back, t.file.is_some()));
+        let shown = self.term.take().and_then(|i| self.terms.get(i)).map(|t| (t.repo.clone(), t.back, t.session.as_ref().map(|s| s.kind)));
         self.mode = Mode::Normal;
-        if let Some((path, back, editor)) = shown {
+        if let Some((path, back, program)) = shown {
             self.mode = self.screen(back);
-            if editor {
-                self.log(Level::Info, "the editor keeps running: Ctrl+E on the file shows it again");
+            if let Some(kind) = program {
+                self.log(Level::Info, format!("the {kind} keeps running: open it again the same way to come back"));
             }
             self.reload(path);
         }
     }
 
-    /// An editor session is on screen (Oxide's own frame and key bar stay around it).
-    pub fn editor_shown(&self) -> bool {
-        self.mode == Mode::Terminal && self.term.and_then(|i| self.terms.get(i)).is_some_and(|t| t.file.is_some())
+    /// An editor or the file manager is on screen (Oxide's own frame and key bar stay around it).
+    pub fn program_shown(&self) -> bool {
+        self.mode == Mode::Terminal && self.term.and_then(|i| self.terms.get(i)).is_some_and(|t| t.session.is_some())
     }
 
     /// `back` if that screen is still open, else the dashboard.
@@ -3106,13 +3101,13 @@ impl App {
         if self.terms.iter().all(Term::alive) {
             return;
         }
-        let shown = self.term.and_then(|i| self.terms.get(i)).map(|t| (t.repo.clone(), t.dir.clone(), t.file.clone()));
+        let shown = self.term.and_then(|i| self.terms.get(i)).map(|t| (t.repo.clone(), t.dir.clone(), t.session.clone()));
         let was_shown = self.term;
-        // (repository, screen to return to, whether it was an editor) of every program that ended
+        // (repository, screen to return to, whether it was an editor or file manager, whether it was on screen)
         let gone: Vec<(PathBuf, Mode, bool, bool)> =
-            self.terms.iter().enumerate().filter(|(_, t)| !t.alive()).map(|(i, t)| (t.repo.clone(), t.back, t.file.is_some(), was_shown == Some(i))).collect();
+            self.terms.iter().enumerate().filter(|(_, t)| !t.alive()).map(|(i, t)| (t.repo.clone(), t.back, t.session.is_some(), was_shown == Some(i))).collect();
         self.terms.retain(Term::alive);
-        self.term = shown.and_then(|(repo, dir, file)| self.terms.iter().position(|t| t.repo == repo && t.dir == dir && t.file == file));
+        self.term = shown.and_then(|(repo, dir, session)| self.terms.iter().position(|t| t.repo == repo && t.dir == dir && t.session == session));
         for (path, back, editor, was_open) in gone {
             if was_open && self.mode == Mode::Terminal && self.term.is_none() {
                 self.mode = self.screen(back);
@@ -3132,16 +3127,6 @@ impl App {
     fn open_files(&mut self) {
         let Some((path, name)) = self.selected().map(|r| (r.path.clone(), r.name.clone())) else { return };
         self.spawn_detached("xdg-open", &[path.display().to_string()], &format!("{name}: opened in the file manager"));
-    }
-
-    /// Called by the event loop after a `Launch` program exited.
-    pub fn launch_done(&mut self, repo: &Path, result: Result<(), String>) {
-        if let Err(e) = result {
-            self.log(Level::Error, e);
-        }
-        self.reload(repo.to_path_buf()); // the program may have changed the working tree
-        self.reload_code(repo);
-        self.reload_diff(repo);
     }
 
     /// Reloads only the selected repository.

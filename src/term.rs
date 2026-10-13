@@ -19,14 +19,25 @@ use crate::app::Mode;
 /// Lines of output kept above the visible screen, reachable with Shift+PageUp.
 const SCROLLBACK: usize = 5000;
 
-/// One shell running inside a repository.
+/// What a terminal runs when it is not a plain shell: an editor or the file manager, shown inside Oxide's frame.
+#[derive(Clone, PartialEq)]
+pub struct Session {
+    /// Tells sessions apart: the same one is shown again instead of started twice.
+    pub id: String,
+    /// The title of its pane.
+    pub title: String,
+    /// What it is, for messages (`editor`, `file manager`).
+    pub kind: &'static str,
+}
+
+/// One shell, or one program such as an editor, running inside a repository.
 pub struct Term {
     /// The repository the shell belongs to.
     pub repo: PathBuf,
     /// The directory the shell was started in: the repository, or a folder inside it.
     pub dir: PathBuf,
-    /// For an editor session, the file it was started on (relative to the repository); None for a shell.
-    pub file: Option<String>,
+    /// Set for a program that is not a plain shell.
+    pub session: Option<Session>,
     /// The screen to return to when this terminal is hidden or ends.
     pub back: Mode,
     /// Screen state, fed by the reader thread and read by the UI.
@@ -94,7 +105,7 @@ impl Term {
                 alive.store(false, Ordering::Relaxed);
             });
         }
-        Ok(Term { repo: repo.to_path_buf(), dir: dir.to_path_buf(), file: None, back: Mode::Normal, parser, writer, master: pair.master, child, alive, size: (rows, cols) })
+        Ok(Term { repo: repo.to_path_buf(), dir: dir.to_path_buf(), session: None, back: Mode::Normal, parser, writer, master: pair.master, child, alive, size: (rows, cols) })
     }
 
     /// The shell is still running.
