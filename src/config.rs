@@ -5,7 +5,8 @@
 //! returns nothing, the global variables it sets. Keys: `root`, `owner`, `email`, `pin` and `ignore` (a string
 //! or a list of strings), `depth` (number), `color`, `hints`, `logs` and `ci` (booleans), `autofetch` (`false`,
 //! or an interval such as `"10m"`; a bare number counts minutes) and `clone_dir` (string). `pin` / `ignore` take
-//! a repository directory name, or a path when the value contains `/` or starts with `~`.
+//! a repository directory name, or a path when the value contains `/` or starts with `~`. `languages` is a list
+//! of tables that add languages to the new-project menu (`K`) or replace a built-in one; see `read_languages`.
 
 use mlua::{Lua, Table, Value};
 use std::{
@@ -13,7 +14,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::git;
+use crate::{
+    git,
+    scaffold::{Lang, Step, Variant},
+};
 
 /// How many directory levels below a root are searched for repositories.
 const DEFAULT_DEPTH: usize = 6;
@@ -45,6 +49,8 @@ pub struct Config {
     pub pins: Vec<String>,
     /// Repositories hidden from the list (directory names or paths from `ignore` entries).
     pub ignores: Vec<String>,
+    /// Languages added to the new-project menu (`languages`).
+    pub languages: Vec<Lang>,
     /// False for the automatic whole-machine roots: each mounted drive is its own root, so a scan
     /// never steps onto another filesystem. Explicit roots (CLI or config) may cross mount points.
     pub cross_devices: bool,
@@ -146,6 +152,69 @@ fn strings(conf: &Table, key: &str) -> Vec<String> {
     }
 }
 
+/// Text that lives as long as the program, for the language table (a menu entry from `config.lua` is never freed).
+fn keep(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
+}
+
+/// One way to set a language up, from a table with `run` (command lines), `dirs` (directories) and
+/// `files` (path -> contents); `note` is the line shown in the menu. They are done in that order.
+fn read_variant(t: &Table, name: String) -> Result<Variant, String> {
+    let mut steps: Vec<Step> = strings(t, "run").into_iter().map(|c| Step::Run(keep(c))).collect();
+    steps.extend(strings(t, "dirs").into_iter().map(|d| Step::Dir(keep(d))));
+    if let Ok(Value::Table(files)) = t.get::<Value>("files") {
+        let mut files: Vec<(String, String)> = files.pairs::<String, String>().flatten().collect();
+        files.sort(); // Lua tables have no order
+        steps.extend(files.into_iter().map(|(path, text)| Step::File(keep(path), keep(text))));
+    }
+    if steps.is_empty() {
+        return Err(format!("variant {name} needs run, dirs or files"));
+    }
+    let note = t.get::<Option<String>>("note").ok().flatten().unwrap_or_else(|| "your own setup".to_string());
+    Ok(Variant { name: keep(name), note: keep(note), steps: steps.leak() })
+}
+
+/// The `languages` option: a list of tables, each with `name`, optionally `ignore` (`.gitignore` lines),
+/// `key` (a built-in `.gitignore` template such as `"rust"`) and either `variants` (a list of tables with
+/// `name`, `note`, `run`, `dirs`, `files`) or those same fields directly for a language with one setup.
+/// `run` lines may use `{name}`, `{slug}`, `{pkg}` and `{user}`. Entries that do not fit are skipped; the
+/// first problem is returned so it can be logged.
+fn read_languages(conf: &Table) -> (Vec<Lang>, Option<String>) {
+    let list = match conf.get::<Value>("languages") {
+        Ok(Value::Nil) => return (Vec::new(), None),
+        Ok(Value::Table(t)) => t,
+        _ => return (Vec::new(), Some("languages: expected a list of tables".to_string())),
+    };
+    let (mut langs, mut problem) = (Vec::new(), None);
+    for (i, entry) in list.sequence_values::<Table>().enumerate() {
+        let one = entry.map_err(|_| "expected a table".to_string()).and_then(|t| {
+            let name = t.get::<String>("name").map_err(|_| "needs a name".to_string())?;
+            let variants = match t.get::<Value>("variants") {
+                Ok(Value::Table(vs)) => vs
+                    .sequence_values::<Table>()
+                    .flatten()
+                    .map(|v| {
+                        let vname = v.get::<Option<String>>("name").ok().flatten().unwrap_or_else(|| "Default".to_string());
+                        read_variant(&v, vname)
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| format!("{name}: {e}"))?,
+                _ => vec![read_variant(&t, "Default".to_string()).map_err(|e| format!("{name}: {e}"))?],
+            };
+            if variants.is_empty() {
+                return Err(format!("{name}: variants is empty"));
+            }
+            let key = t.get::<Option<String>>("key").ok().flatten().unwrap_or_default();
+            Ok(Lang { name: keep(name), key: keep(key), ignore: keep(strings(&t, "ignore").join("\n")), variants: variants.leak() })
+        });
+        match one {
+            Ok(l) => langs.push(l),
+            Err(e) => problem = problem.or(Some(format!("languages[{}]: {e}", i + 1))),
+        }
+    }
+    (langs, problem)
+}
+
 /// Seconds in an interval such as `30s`, `10m` or `1h`; a bare number counts minutes and `off` means 0.
 fn parse_interval(val: &str) -> Option<u64> {
     let val = val.trim().to_lowercase();
@@ -169,6 +238,7 @@ impl Config {
         let mut owners = Vec::new();
         let mut depth = DEFAULT_DEPTH;
         let (mut pins, mut ignores) = (Vec::new(), Vec::new());
+        let mut languages = Vec::new();
         let mut hints = true;
         let mut logs = true;
         let mut clone_dir = home();
@@ -187,6 +257,9 @@ impl Config {
                     emails.extend(strings(&conf, "email").iter().map(|e| e.to_lowercase()));
                     pins = strings(&conf, "pin");
                     ignores = strings(&conf, "ignore");
+                    let (found, problem) = read_languages(&conf);
+                    languages = found;
+                    error = error.or(problem);
                     match conf.get::<Value>("depth") {
                         Ok(Value::Nil) => {}
                         Ok(Value::Integer(n)) if n >= 0 => depth = n as usize,
@@ -235,6 +308,6 @@ impl Config {
         owners.sort();
         owners.dedup();
 
-        Config { error, roots, owners, depth, color, hints, logs, emails, autofetch, ci, clone_dir, pins, ignores, cross_devices: explicit }
+        Config { error, roots, owners, depth, color, hints, logs, emails, autofetch, ci, clone_dir, pins, ignores, languages, cross_devices: explicit }
     }
 }

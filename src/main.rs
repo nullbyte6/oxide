@@ -77,6 +77,7 @@ fn main() -> ExitCode {
         }
     }
     let cfg = Config::load(paths);
+    scaffold::register(cfg.languages.clone());
 
     if list {
         if let Some(e) = &cfg.error {

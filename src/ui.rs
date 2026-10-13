@@ -29,7 +29,7 @@ use crate::{
     logger::{self, Level},
     palette,
     repo::{Health, Owner, Repo},
-    scaffold::LANGS,
+    scaffold::langs,
     syntax::Tok,
     term::Term,
 };
@@ -158,7 +158,7 @@ fn draw_project(f: &mut Frame, app: &mut App) {
     // Rows of the page's list plus the lines around it (borders, filter or holder line).
     let (rows, extra) = match v.step {
         ProjectStep::Lang => (v.choices().len(), 4),
-        ProjectStep::Variant => (LANGS[v.lang].variants.len(), 3),
+        ProjectStep::Variant => (langs()[v.lang].variants.len(), 3),
         ProjectStep::License => (LICENSES.len() + 1, 4),
         // The plan, a line for programs that are missing and the lines around them.
         ProjectStep::Confirm => (v.plan.as_ref().map_or(0, |p| p.actions.len() + usize::from(!p.missing.is_empty())), 7),
@@ -175,7 +175,7 @@ fn draw_project(f: &mut Frame, app: &mut App) {
         ProjectStep::Lang => {
             let [filter, list] = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(inner);
             let found = v.choices();
-            let count = format!("{}/{}", found.iter().filter(|c| matches!(c, Choice::Lang(_))).count(), LANGS.len());
+            let count = format!("{}/{}", found.iter().filter(|c| matches!(c, Choice::Lang(_))).count(), langs().len());
             let line = Line::from(vec![
                 Span::styled("Filter ▸ ", hue(BOLD, ACCENT)),
                 Span::styled(v.query.clone(), BOLD),
@@ -191,7 +191,7 @@ fn draw_project(f: &mut Frame, app: &mut App) {
                 .iter()
                 .map(|c| match c {
                     Choice::Lang(i) => {
-                        let l = &LANGS[*i];
+                        let l = &langs()[*i];
                         ListItem::new(Line::from(vec![Span::styled(fit(l.name, 16), BOLD), Span::raw(" "), Span::styled(fit(l.variants[0].note, note_w), DIM)]))
                     }
                     Choice::Other => ListItem::new(Line::from(vec![
@@ -204,7 +204,7 @@ fn draw_project(f: &mut Frame, app: &mut App) {
             f.render_stateful_widget(List::new(items).highlight_style(INVERSE), list, &mut v.lang_state);
         }
         ProjectStep::Variant => {
-            let lang = &LANGS[v.lang];
+            let lang = &langs()[v.lang];
             let note_w = (inner.width as usize).saturating_sub(24);
             let items: Vec<ListItem> = lang
                 .variants
@@ -238,7 +238,7 @@ fn draw_project(f: &mut Frame, app: &mut App) {
         }
         ProjectStep::Confirm => {
             let Some(plan) = &v.plan else { return };
-            let lang = &LANGS[v.lang];
+            let lang = &langs()[v.lang];
             let variant = lang.variants[v.variant_state.selected().unwrap_or(0)].name;
             let license = v.license().map_or("no license", |l| l.id);
             let mut lines = vec![

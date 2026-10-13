@@ -397,7 +397,7 @@ const CLOJURE: &str = "\
 pom.xml.asc
 ";
 
-/// The `.gitignore` for the language with this `key` (see `scaffold::LANGS`), followed by the common part.
+/// The `.gitignore` for the language with this `key` (see `scaffold::langs`), followed by the common part.
 /// Unknown keys get only the common part.
 pub fn gitignore(key: &str) -> String {
     let body = match key {

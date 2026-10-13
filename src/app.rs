@@ -26,7 +26,7 @@ use crate::{
     marks::{Mark, Marks},
     palette,
     repo::{Health, Owner, Repo},
-    scaffold::{self, LANGS, Plan},
+    scaffold::{self, Plan, langs},
     term::Term,
     watch::Watcher,
     worker::{self, Msg},
@@ -354,7 +354,7 @@ pub enum ProjectStep {
 /// A row of the language page.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Choice {
-    /// An index into `scaffold::LANGS`.
+    /// An index into `scaffold::langs()`.
     Lang(usize),
     /// Skip the menu and set the project up by hand in the embedded terminal.
     Other,
@@ -367,7 +367,7 @@ pub struct ProjectView {
     /// Text typed on the language page; it narrows the list.
     pub query: String,
     pub lang_state: ListState,
-    /// The chosen language, an index into `LANGS`.
+    /// The chosen language, an index into `scaffold::langs()`.
     pub lang: usize,
     pub variant_state: ListState,
     /// Selection on the license page; `LICENSES.len()` is "no license".
@@ -387,7 +387,7 @@ impl ProjectView {
     /// The rows of the language page that match the query, "Other" last.
     pub fn choices(&self) -> Vec<Choice> {
         let q = self.query.to_lowercase();
-        let mut out: Vec<Choice> = (0..LANGS.len()).filter(|&i| LANGS[i].name.to_lowercase().contains(&q)).map(Choice::Lang).collect();
+        let mut out: Vec<Choice> = (0..langs().len()).filter(|&i| langs()[i].name.to_lowercase().contains(&q)).map(Choice::Lang).collect();
         if q.is_empty() || ["other", "manual", "terminal"].iter().any(|w| w.contains(&q)) {
             out.push(Choice::Other);
         }
@@ -2549,7 +2549,7 @@ impl App {
                         Some(Choice::Lang(i)) => {
                             v.lang = *i;
                             v.variant_state.select(Some(0));
-                            v.step = if LANGS[*i].variants.len() > 1 { ProjectStep::Variant } else { ProjectStep::License };
+                            v.step = if langs()[*i].variants.len() > 1 { ProjectStep::Variant } else { ProjectStep::License };
                             return;
                         }
                         // The menu is only for the common case; anything else is done by hand.
@@ -2577,7 +2577,7 @@ impl App {
             ProjectStep::Variant => match key.code {
                 KeyCode::Esc | KeyCode::Backspace => v.step = ProjectStep::Lang,
                 KeyCode::Enter => v.step = ProjectStep::License,
-                _ => v.variant_state.select(step(v.variant_state.selected(), LANGS[v.lang].variants.len(), delta)),
+                _ => v.variant_state.select(step(v.variant_state.selected(), langs()[v.lang].variants.len(), delta)),
             },
             ProjectStep::License if v.editing => match key.code {
                 KeyCode::Esc | KeyCode::Enter | KeyCode::Tab => v.editing = false,
@@ -2590,11 +2590,11 @@ impl App {
             },
             ProjectStep::License => match key.code {
                 KeyCode::Esc | KeyCode::Backspace => {
-                    v.step = if LANGS[v.lang].variants.len() > 1 { ProjectStep::Variant } else { ProjectStep::Lang };
+                    v.step = if langs()[v.lang].variants.len() > 1 { ProjectStep::Variant } else { ProjectStep::Lang };
                 }
                 KeyCode::Tab => v.editing = true,
                 KeyCode::Enter => {
-                    let lang = &LANGS[v.lang];
+                    let lang = &langs()[v.lang];
                     let variant = &lang.variants[v.variant_state.selected().unwrap_or(0)];
                     v.plan = Some(Plan::build(&v.repo, lang, variant, v.license(), v.holder.trim(), v.year));
                     v.step = ProjectStep::Confirm;

@@ -14,6 +14,7 @@ use std::{
     fs,
     path::Path,
     process::{Command, Stdio},
+    sync::OnceLock,
 };
 
 use crate::{ignore, license::License};
@@ -31,6 +32,7 @@ pub enum Step {
 use Step::{Dir, File, Run};
 
 /// A way to set a language up (usually a build tool).
+#[derive(Clone, Copy)]
 pub struct Variant {
     pub name: &'static str,
     /// What it does in a few words, shown in the menu.
@@ -38,10 +40,13 @@ pub struct Variant {
     pub steps: &'static [Step],
 }
 
+#[derive(Clone, Copy)]
 pub struct Lang {
     pub name: &'static str,
-    /// Selects the `.gitignore` template (see `ignore::gitignore`).
+    /// Selects the `.gitignore` template (see `ignore::gitignore`); empty for none.
     pub key: &'static str,
+    /// Extra `.gitignore` lines for languages defined in `config.lua`; empty for the built-in ones.
+    pub ignore: &'static str,
     /// Never empty; the first one is the default.
     pub variants: &'static [Variant],
 }
@@ -50,11 +55,32 @@ const fn v(name: &'static str, note: &'static str, steps: &'static [Step]) -> Va
     Variant { name, note, steps }
 }
 
-/// The languages in the menu, most popular first.
-pub const LANGS: &[Lang] = &[
+/// Every language in the menu: the built-in ones, then those of `config.lua` (one with the name of a built-in
+/// language replaces it). Fixed once `register` or the first `langs` call has run.
+static ALL: OnceLock<Vec<Lang>> = OnceLock::new();
+
+/// Makes the languages of `config.lua` part of the menu; call it once, before the menu is first used.
+pub fn register(user: Vec<Lang>) {
+    let mut all = BUILTIN.to_vec();
+    for lang in user {
+        match all.iter().position(|l| l.name.eq_ignore_ascii_case(lang.name)) {
+            Some(i) => all[i] = lang,
+            None => all.push(lang),
+        }
+    }
+    let _ = ALL.set(all);
+}
+
+pub fn langs() -> &'static [Lang] {
+    ALL.get_or_init(|| BUILTIN.to_vec())
+}
+
+/// The built-in languages, most popular first.
+const BUILTIN: &[Lang] = &[
     Lang {
         name: "Rust",
         key: "rust",
+        ignore: "",
         variants: &[
             v("Binary", "cargo init", &[Run("cargo init --name {pkg}")]),
             v("Library", "cargo init --lib", &[Run("cargo init --lib --name {pkg}")]),
@@ -63,6 +89,7 @@ pub const LANGS: &[Lang] = &[
     Lang {
         name: "Python",
         key: "python",
+        ignore: "",
         variants: &[
             v("venv + pip", "src/ layout, pyproject.toml, .venv", &[
                 Run("python3 -m venv .venv"),
@@ -77,6 +104,7 @@ pub const LANGS: &[Lang] = &[
     Lang {
         name: "JavaScript",
         key: "node",
+        ignore: "",
         variants: &[
             v("npm", "npm init -y, src/", &[Run("npm init -y"), File("src/index.js", JS_MAIN)]),
             v("pnpm", "pnpm init, src/", &[Run("pnpm init"), File("src/index.js", JS_MAIN)]),
@@ -86,6 +114,7 @@ pub const LANGS: &[Lang] = &[
     Lang {
         name: "TypeScript",
         key: "node",
+        ignore: "",
         variants: &[
             v("npm", "npm init -y, typescript, tsconfig.json", &[
                 Run("npm init -y"),
@@ -99,6 +128,7 @@ pub const LANGS: &[Lang] = &[
     Lang {
         name: "Go",
         key: "go",
+        ignore: "",
         variants: &[v("Module", "go mod init, cmd/ and internal/", &[
             Run("go mod init {slug}"),
             File("cmd/{pkg}/main.go", GO_MAIN),
@@ -108,6 +138,7 @@ pub const LANGS: &[Lang] = &[
     Lang {
         name: "Java",
         key: "java",
+        ignore: "",
         variants: &[
             v("Maven", "pom.xml, src/main/java, src/test/java", &[
                 File("pom.xml", JAVA_POM),
@@ -131,6 +162,7 @@ pub const LANGS: &[Lang] = &[
     Lang {
         name: "Kotlin",
         key: "kotlin",
+        ignore: "",
         variants: &[v("Gradle (Kotlin DSL)", "build.gradle.kts, src/main/kotlin", &[
             File("settings.gradle.kts", "rootProject.name = \"{slug}\"\n"),
             File("build.gradle.kts", KOTLIN_GRADLE),
@@ -141,6 +173,7 @@ pub const LANGS: &[Lang] = &[
     Lang {
         name: "C",
         key: "c",
+        ignore: "",
         variants: &[v("Makefile", "Makefile, src/, include/", &[
             File("Makefile", C_MAKEFILE),
             File("src/main.c", C_MAIN),
@@ -150,6 +183,7 @@ pub const LANGS: &[Lang] = &[
     Lang {
         name: "C++",
         key: "cpp",
+        ignore: "",
         variants: &[
             v("CMake", "CMakeLists.txt, src/, include/", &[
                 File("CMakeLists.txt", CPP_CMAKE),
@@ -166,6 +200,7 @@ pub const LANGS: &[Lang] = &[
     Lang {
         name: "C#",
         key: "csharp",
+        ignore: "",
         variants: &[
             v("Console", "dotnet new console", &[Run("dotnet new console --name {slug} --output .")]),
             v("Class library", "dotnet new classlib", &[Run("dotnet new classlib --name {slug} --output .")]),
@@ -174,6 +209,7 @@ pub const LANGS: &[Lang] = &[
     Lang {
         name: "PHP",
         key: "php",
+        ignore: "",
         variants: &[v("Composer", "composer init, src/", &[
             Run("composer init --no-interaction --name={user}/{pkg}"),
             File("src/index.php", PHP_MAIN),
@@ -182,6 +218,7 @@ pub const LANGS: &[Lang] = &[
     Lang {
         name: "Ruby",
         key: "ruby",
+        ignore: "",
         variants: &[v("Bundler", "bundle init, lib/", &[
             Run("bundle init"),
             File("lib/{pkg}.rb", RUBY_MAIN),
@@ -191,6 +228,7 @@ pub const LANGS: &[Lang] = &[
     Lang {
         name: "Swift",
         key: "swift",
+        ignore: "",
         variants: &[
             v("Executable", "swift package init", &[Run("swift package init --type executable --name {pkg}")]),
             v("Library", "swift package init --type library", &[Run("swift package init --type library --name {pkg}")]),
@@ -199,31 +237,37 @@ pub const LANGS: &[Lang] = &[
     Lang {
         name: "Dart",
         key: "dart",
+        ignore: "",
         variants: &[v("Console", "dart create", &[Run("dart create --force --template console .")])],
     },
     Lang {
         name: "Lua",
         key: "lua",
+        ignore: "",
         variants: &[v("Plain", "src/main.lua, tests/", &[File("src/main.lua", LUA_MAIN), Dir("tests")])],
     },
     Lang {
         name: "Zig",
         key: "zig",
+        ignore: "",
         variants: &[v("zig init", "zig init", &[Run("zig init")])],
     },
     Lang {
         name: "Elixir",
         key: "elixir",
+        ignore: "",
         variants: &[v("Mix", "mix new", &[Run("mix new . --app {pkg}")])],
     },
     Lang {
         name: "Haskell",
         key: "haskell",
+        ignore: "",
         variants: &[v("Cabal", "cabal init, app/", &[Run("cabal init --non-interactive --exe --package-name={slug}")])],
     },
     Lang {
         name: "Scala",
         key: "scala",
+        ignore: "",
         variants: &[v("sbt", "build.sbt, src/main/scala", &[
             File("build.sbt", SCALA_SBT),
             File("project/build.properties", "sbt.version=1.10.7\n"),
@@ -234,11 +278,13 @@ pub const LANGS: &[Lang] = &[
     Lang {
         name: "R",
         key: "r",
+        ignore: "",
         variants: &[v("Scripts", "R/, data/, main.R", &[File("main.R", R_MAIN), Dir("R"), Dir("data")])],
     },
     Lang {
         name: "Julia",
         key: "julia",
+        ignore: "",
         variants: &[v("Package", "Project.toml, src/, test/", &[
             File("Project.toml", JULIA_PROJECT),
             File("src/{pkg}.jl", JULIA_MAIN),
@@ -248,6 +294,7 @@ pub const LANGS: &[Lang] = &[
     Lang {
         name: "Shell",
         key: "shell",
+        ignore: "",
         variants: &[v("Script", "bin/ script, lib/", &[
             File("bin/{slug}", SHELL_MAIN),
             Run("chmod +x bin/{slug}"),
@@ -257,6 +304,7 @@ pub const LANGS: &[Lang] = &[
     Lang {
         name: "Nim",
         key: "nim",
+        ignore: "",
         variants: &[v("Nimble", "nimble file, src/", &[
             File("{slug}.nimble", NIM_NIMBLE),
             File("src/{pkg}.nim", NIM_MAIN),
@@ -266,6 +314,7 @@ pub const LANGS: &[Lang] = &[
     Lang {
         name: "Perl",
         key: "perl",
+        ignore: "",
         variants: &[v("Plain", "script/, lib/, t/, cpanfile", &[
             File("script/main.pl", PERL_MAIN),
             File("cpanfile", "# requires 'Some::Module';\n"),
@@ -276,6 +325,7 @@ pub const LANGS: &[Lang] = &[
     Lang {
         name: "Clojure",
         key: "clojure",
+        ignore: "",
         variants: &[v("deps.edn", "deps.edn, src/, test/", &[
             File("deps.edn", CLJ_DEPS),
             File("src/{pkg}/core.clj", CLJ_MAIN),
@@ -357,7 +407,11 @@ impl Plan {
                 File(path, text) => actions.push(Action::File { path: fill(path), text: fill(text), mode: Write::Always }),
             }
         }
-        actions.push(Action::File { path: ".gitignore".to_string(), text: ignore::gitignore(lang.key), mode: Write::Merge });
+        let mut ignored = ignore::gitignore(lang.key);
+        if !lang.ignore.trim().is_empty() {
+            ignored = format!("# {}\n{}\n\n{ignored}", lang.name, lang.ignore.trim_end());
+        }
+        actions.push(Action::File { path: ".gitignore".to_string(), text: ignored, mode: Write::Merge });
         actions.push(Action::File { path: "README.md".to_string(), text: format!("# {name}\n"), mode: Write::IfMissing });
         if let Some(l) = license {
             actions.push(Action::File { path: "LICENSE".to_string(), text: l.text(holder, year), mode: Write::Always });
