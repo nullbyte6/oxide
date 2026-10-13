@@ -1322,6 +1322,7 @@ impl App {
             KeyCode::Char('b') => self.open_branches(),
             KeyCode::Char('O') => self.open_reflog(),
             KeyCode::Char('W') => self.open_trees(),
+            KeyCode::Char('V') => self.open_tags(),
             KeyCode::Char('E') => self.open_amend(),
             KeyCode::Char('I') => self.open_init(),
             KeyCode::Char('i') => self.open_gh(Kind::Issues),

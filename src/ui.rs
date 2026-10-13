@@ -128,6 +128,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Text => draw_text(f, app),
         Mode::Finder => draw_finder(f, app),
         Mode::Project => draw_project(f, app),
+        Mode::Tags => draw_tags(f, app),
         _ => {}
     }
     if app.mode == Mode::Terminal
@@ -884,6 +885,11 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
         return;
     }
+    if app.mode == Mode::Tags {
+        let hints = [("↑↓", "move"), ("Enter", "show the commit"), ("n", "new"), ("p", "push"), ("d", "delete"), ("D", "delete + remote"), ("r", "release"), ("R", "draft release"), ("o", "open release"), ("f", "refresh"), ("Esc", "close")];
+        f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
+        return;
+    }
     if app.mode == Mode::Remotes {
         let hints = [("↑↓", "move"), ("a", "add"), ("e", "change URL"), ("n", "rename"), ("d", "remove"), ("Enter", "fetch"), ("Esc", "close")];
         f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
@@ -1147,6 +1153,65 @@ fn draw_reflog(f: &mut Frame, app: &mut App) {
         })
         .collect();
     f.render_stateful_widget(List::new(items).block(block).highlight_style(INVERSE), area, &mut v.state);
+}
+
+/// The tags of a repository as a popup: kind, commit, age, whether the remote has it, its GitHub release and message.
+fn draw_tags(f: &mut Frame, app: &mut App) {
+    let last = app.log.last().map(|l| l.text.clone()).unwrap_or_default();
+    let Some(v) = app.tags.as_mut() else { return };
+    let rows = v.items.as_ref().map_or(1, Vec::len) as u16;
+    let area = f.area();
+    let w = 130.min(area.width);
+    let h = (rows + 2).clamp(5, area.height.saturating_sub(2).max(5)).min(area.height);
+    let [_, mid, _] = Layout::vertical([Constraint::Fill(1), Constraint::Length(h), Constraint::Fill(1)]).areas(area);
+    let [_, popup, _] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(w), Constraint::Fill(1)]).areas(mid);
+    f.render_widget(Clear, popup);
+    // The bottom line says what could not be learned (offline, no gh), else the newest log message.
+    let note = match (&v.remote, &v.releases) {
+        (Some(Err(e)), _) if v.slug.is_none() || !e.is_empty() => format!("remote: {}", e.lines().next().unwrap_or("")),
+        (_, Some(Err(e))) if v.slug.is_some() => format!("releases: {}", e.lines().next().unwrap_or("")),
+        _ => last,
+    };
+    let block = pane(format!(" Tags · {} ", v.name), true).title_bottom(Line::from(Span::styled(format!(" {note} "), DIM)));
+    let msg = |text: String, f: &mut Frame, block: Block<'static>| {
+        f.render_widget(Paragraph::new(text).style(DIM.add_modifier(Modifier::ITALIC)).block(block), popup);
+    };
+    if let Some(e) = &v.error {
+        return msg(format!("git tag failed: {}", e.lines().next().unwrap_or("")), f, block);
+    }
+    let Some(items) = &v.items else { return msg("Loading…".to_string(), f, block) };
+    if items.is_empty() {
+        return msg("No tags yet. Press n to make one on the current commit.".to_string(), f, block);
+    }
+    let subject_w = (popup.width as usize).saturating_sub(4 + 22 + 2 + 9 + 16 + 8 + 9 + 4).max(8);
+    let rows: Vec<ListItem> = items
+        .iter()
+        .map(|t| {
+            let (remote, remote_style) = match &v.remote {
+                None => ("…", DIM),
+                Some(Err(_)) => ("?", DIM),
+                Some(Ok(set)) if set.contains(&t.name) => ("pushed", hue(PLAIN, GOOD)),
+                Some(Ok(_)) => ("local", hue(BOLD, WARN)),
+            };
+            let release = match v.releases.as_ref().and_then(|r| r.as_ref().ok()).and_then(|m| m.get(&t.name)) {
+                Some(r) if r.draft => "draft",
+                Some(r) if r.prerelease => "pre",
+                Some(r) if r.latest => "latest",
+                Some(_) => "release",
+                None => "",
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(fit(&t.name, 22), BOLD),
+                Span::styled(if t.annotated { " ◆ " } else { " · " }, DIM),
+                Span::styled(fit(&t.hash, 8), hue(PLAIN, ACCENT)),
+                Span::styled(format!(" {}", fit(&t.age, 15)), DIM),
+                Span::styled(format!(" {}", fit(remote, 7)), remote_style),
+                Span::styled(format!(" {}", fit(release, 8)), hue(PLAIN, ACCENT)),
+                Span::styled(format!(" {}", fit(&t.subject, subject_w)), PLAIN),
+            ]))
+        })
+        .collect();
+    f.render_stateful_widget(List::new(rows).block(block).highlight_style(INVERSE), popup, &mut v.state);
 }
 
 /// The remotes of a repository as a popup, with the newest log message below it.
@@ -1519,6 +1584,7 @@ fn draw_help(f: &mut Frame) {
         ("m z Z", "merge a branch (empty = upstream) / stash all changes / pop the stash"),
         ("d v b I", "diff of the file / commit log / branches / git init in any folder"),
         ("W", "worktrees and submodules: add / remove / go to / update"),
+        ("V", "tags and releases: make / push / delete a tag, create a GitHub release"),
         ("O", "reflog: where HEAD has been; u undoes an entry, Enter moves the branch there"),
         ("D", "DELETE the repository from disk (asks you to type its name)"),
         ("i y B S", "GitHub: issues / pull requests / repo in browser / find & clone"),
