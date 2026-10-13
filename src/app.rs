@@ -25,6 +25,7 @@ use crate::{
     marks::{Mark, Marks},
     palette,
     repo::{Health, Owner, Repo},
+    term::Term,
     watch::Watcher,
     worker::{self, Msg},
 };
@@ -413,6 +414,8 @@ pub enum Mode {
     Text,
     /// GitHub repository search results (`App::finder`).
     Finder,
+    /// The embedded terminal (`App::terms[App::term]`) is open and gets every key.
+    Terminal,
     Help,
 }
 
@@ -508,6 +511,10 @@ pub struct App {
     ci_auto: bool,
     /// A terminal program requested by the user; taken and run by the event loop.
     pub launch: Option<Launch>,
+    /// Embedded shells, one per repository. They keep running while hidden.
+    pub terms: Vec<Term>,
+    /// The shell in `terms` that is shown while in `Mode::Terminal`.
+    pub term: Option<usize>,
     marks: Marks,
     logger: Logger,
     scan_paths: HashSet<PathBuf>,
@@ -623,6 +630,8 @@ impl App {
             ci_busy: false,
             ci_auto: cfg_ci,
             launch: None,
+            terms: Vec::new(),
+            term: None,
             logger: Logger::open(),
             scan_paths: HashSet::new(),
             tx,
@@ -967,6 +976,7 @@ impl App {
     /// Housekeeping run once per event-loop iteration: reloads repositories whose files changed,
     /// moves the working-tree watch to the selected repository and starts the timed fetch.
     pub fn background(&mut self) {
+        self.reap_terms();
         let due: Vec<PathBuf> = self.changed.iter().filter(|(_, t)| t.elapsed() >= RELOAD_DELAY).map(|(p, _)| p.clone()).collect();
         for path in due {
             self.changed.remove(&path);
@@ -1103,6 +1113,10 @@ impl App {
     // ---- input ----
 
     pub fn on_key(&mut self, key: KeyEvent) {
+        // The terminal gets every key, Ctrl+C included, except Ctrl+T which hides it.
+        if self.mode == Mode::Terminal {
+            return self.on_term_key(key);
+        }
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.quit = true;
             return;
@@ -1121,6 +1135,7 @@ impl App {
             Mode::GitHub => self.on_gh_key(key),
             Mode::Text => self.on_text_key(key),
             Mode::Finder => self.on_finder_key(key),
+            Mode::Terminal => {}
             Mode::Normal => self.on_normal_key(key),
         }
     }
@@ -1187,6 +1202,7 @@ impl App {
             KeyCode::Char('U') => self.push_visible(),
             KeyCode::Char('e') => self.open_browser(),
             KeyCode::Char('t') => self.open_shell(),
+            KeyCode::Char('T') => self.open_terminal(),
             KeyCode::Char('o') => self.open_files(),
             KeyCode::Char('/') => self.open_input(InputKind::Search),
             KeyCode::Char('R') => self.start_scan(),
@@ -2419,6 +2435,68 @@ impl App {
     fn open_shell(&mut self) {
         if let Some(r) = self.selected() {
             self.launch = Some(Launch::Shell { repo: r.path.clone() });
+        }
+    }
+
+    /// Shows the embedded terminal of the selected repository, starting its shell on first use.
+    fn open_terminal(&mut self) {
+        let Some(path) = self.selected().map(|r| r.path.clone()) else { return };
+        let i = match self.terms.iter().position(|t| t.repo == path) {
+            Some(i) => i,
+            None => {
+                // The size is corrected to the real panel by the first frame.
+                let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+                match Term::spawn(&path, rows.saturating_sub(2), cols.saturating_sub(2)) {
+                    Ok(t) => {
+                        self.terms.push(t);
+                        self.terms.len() - 1
+                    }
+                    Err(e) => return self.log(Level::Error, e),
+                }
+            }
+        };
+        self.term = Some(i);
+        self.mode = Mode::Terminal;
+    }
+
+    /// Keys while the terminal is shown: Ctrl+T hides it, Shift+PageUp/PageDown scroll its history,
+    /// everything else goes to the shell.
+    fn on_term_key(&mut self, key: KeyEvent) {
+        let Some(t) = self.term.and_then(|i| self.terms.get_mut(i)) else {
+            self.mode = Mode::Normal;
+            return;
+        };
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        match key.code {
+            KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => self.hide_terminal(),
+            KeyCode::PageUp if shift => t.scroll(10),
+            KeyCode::PageDown if shift => t.scroll(-10),
+            _ => t.send_key(key),
+        }
+    }
+
+    /// Leaves the terminal for the dashboard; the shell keeps running. Its commands may have changed the repository.
+    fn hide_terminal(&mut self) {
+        self.mode = Mode::Normal;
+        if let Some(path) = self.term.take().and_then(|i| self.terms.get(i)).map(|t| t.repo.clone()) {
+            self.reload(path);
+        }
+    }
+
+    /// Drops shells that exited; when the shown one did, the dashboard comes back.
+    fn reap_terms(&mut self) {
+        if self.terms.iter().all(Term::alive) {
+            return;
+        }
+        let shown = self.term.and_then(|i| self.terms.get(i)).map(|t| t.repo.clone());
+        let gone: Vec<PathBuf> = self.terms.iter().filter(|t| !t.alive()).map(|t| t.repo.clone()).collect();
+        self.terms.retain(Term::alive);
+        self.term = shown.and_then(|p| self.terms.iter().position(|t| t.repo == p));
+        if self.mode == Mode::Terminal && self.term.is_none() {
+            self.mode = Mode::Normal;
+        }
+        for path in gone {
+            self.reload(path);
         }
     }
 

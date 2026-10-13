@@ -127,6 +127,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Finder => draw_finder(f, app),
         _ => {}
     }
+    if app.mode == Mode::Terminal
+        && let Some(t) = app.term.and_then(|i| app.terms.get_mut(i))
+    {
+        draw_terminal(f, t);
+    }
     if app.mode == Mode::Palette {
         draw_palette(f, app);
     }
@@ -137,10 +142,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
 /// The embedded terminal, filling the whole screen: the shell's screen is copied cell by cell into the
 /// frame, in the colors the shell asked for. The pseudo-terminal is resized to the room inside the border.
-fn draw_terminal(f: &mut Frame, term: &mut Term, name: &str) {
+fn draw_terminal(f: &mut Frame, term: &mut Term) {
     let area = f.area();
     f.render_widget(Clear, area);
-    let hint = if term.alive() { " Ctrl+T hide · Shift+PgUp/PgDn scroll · exit closes " } else { " shell exited · press any key to close " };
+    let name = term.repo.file_name().map_or_else(|| term.repo.display().to_string(), |n| n.to_string_lossy().into_owned());
+    let hint = " Ctrl+T hide · Shift+PgUp/PgDn scroll · exit closes ";
     let block = pane(format!(" Terminal · {name} "), true).padding(Padding::ZERO).title_bottom(Line::from(Span::styled(hint, DIM)));
     let inner = block.inner(area);
     f.render_widget(block, area);

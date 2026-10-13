@@ -101,7 +101,9 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
     app.start_scan();
     while !app.quit {
         terminal.draw(|f| ui::draw(f, app))?;
-        if event::poll(Duration::from_millis(100))?
+        // Shell output arrives on its own, so the embedded terminal is redrawn much more often.
+        let wait = if app.mode == app::Mode::Terminal { 16 } else { 100 };
+        if event::poll(Duration::from_millis(wait))?
             && let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
         {
