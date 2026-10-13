@@ -136,6 +136,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             flows::draw_workflows(f, app);
             flows::draw_run_form(f, app);
         }
+        Mode::WorkflowNew => {
+            flows::draw_workflows(f, app);
+            flows::draw_wizard(f, app);
+        }
         _ => {}
     }
     if app.mode == Mode::Terminal
@@ -893,8 +897,20 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
     if app.mode == Mode::Workflows {
-        let hints = [("↑↓", "move"), ("Enter", "run by hand"), ("o", "browser"), ("e", "edit"), ("f", "refresh"), ("Esc", "close")];
+        let hints = [("↑↓", "move"), ("Enter", "run by hand"), ("n", "new workflow"), ("o", "browser"), ("e", "edit"), ("f", "refresh"), ("Esc", "close")];
         f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
+        return;
+    }
+    if let (Mode::WorkflowNew, Some(w)) = (app.mode, &app.wizard) {
+        use crate::app::WStep;
+        let hints: &[(&str, &str)] = match w.step {
+            WStep::Kind => &[("↑↓", "move"), ("Enter", "choose"), ("Esc", "cancel")],
+            WStep::Toolchain => &[("↑↓", "move"), ("Enter", "choose"), ("Esc", "back")],
+            WStep::Triggers | WStep::Options => &[("↑↓", "move"), ("Space", "check"), ("Enter", "next"), ("Esc", "back")],
+            WStep::Details => &[("↑↓", "field"), ("type", "edit"), ("Enter", "preview"), ("Esc", "back")],
+            WStep::Preview => &[("↑↓", "scroll"), ("Enter", "write the file"), ("c", "write, commit, push and run"), ("Esc", "back")],
+        };
+        f.render_widget(Paragraph::new(Line::from(hint_spans(hints))), area);
         return;
     }
     if app.mode == Mode::WorkflowRun {
@@ -1601,7 +1617,7 @@ fn draw_help(f: &mut Frame) {
         ("m z Z", "merge a branch (empty = upstream) / stash all changes / pop the stash"),
         ("d v b I", "diff of the file / commit log / branches / git init in any folder"),
         ("W", "worktrees and submodules: add / remove / go to / update"),
-        ("N", "GitHub workflows: run one by hand with its inputs"),
+        ("N", "GitHub workflows: run one by hand with its inputs, or write a new one (n)"),
         ("V", "tags and releases: make / push / delete a tag, create a GitHub release"),
         ("O", "reflog: where HEAD has been; u undoes an entry, Enter moves the branch there"),
         ("D", "DELETE the repository from disk (asks you to type its name)"),

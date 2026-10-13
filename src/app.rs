@@ -14,6 +14,8 @@ use std::{
 
 mod flows;
 
+pub use flows::WStep;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::ListState;
 
@@ -531,6 +533,8 @@ pub enum Mode {
     Workflows,
     /// The form that starts a workflow (`App::run_form`) is open.
     WorkflowRun,
+    /// The wizard that writes a new workflow (`App::wizard`) is open.
+    WorkflowNew,
     Help,
 }
 
@@ -590,6 +594,7 @@ pub struct App {
     pub tags: Option<TagsView>,
     pub workflows: Option<flows::WorkflowsView>,
     pub run_form: Option<flows::RunForm>,
+    pub wizard: Option<flows::Wizard>,
     /// The remote an open input line is about (change URL, rename).
     remote_target: Option<String>,
     /// Why the next commit may be made with the wrong identity (shown next to the commit prompt).
@@ -730,6 +735,7 @@ impl App {
             tags: None,
             workflows: None,
             run_form: None,
+            wizard: None,
             remote_target: None,
             commit_warn: None,
             pending_msg: None,
@@ -1101,7 +1107,7 @@ impl App {
                             // Hook output (pre-commit, commit-msg ...) is part of a commit's result; show more of it.
                             let shown = match label {
                                 "commit" | "amend" => 12,
-                                "set up" | "undo setup" => 30, // one line per step of the plan
+                                "set up" | "undo setup" | "new workflow" => 30, // one line per step of the plan
                                 _ => 3,
                             };
                             for line in out.lines().filter(|l| !l.trim().is_empty()).take(shown) {
@@ -1308,6 +1314,7 @@ impl App {
             Mode::Tags => self.on_tags_key(key),
             Mode::Workflows => self.on_workflows_key(key),
             Mode::WorkflowRun => self.on_run_key(key),
+            Mode::WorkflowNew => self.on_wizard_key(key),
             Mode::Terminal => {}
             Mode::Normal => self.on_normal_key(key),
         }

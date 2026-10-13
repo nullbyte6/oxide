@@ -99,6 +99,9 @@ pub enum Op {
     RemoteFetch(String),
     /// Apply one hunk of a diff to the index: stage it, or with `reverse` unstage it.
     Hunk { patch: String, reverse: bool },
+    /// Write a new workflow file; `publish` also commits and pushes it, and `dispatch` (repository, branch) then
+    /// starts it for the first time.
+    NewWorkflow { file: String, text: String, publish: bool, message: String, dispatch: Option<(String, String)> },
     /// Start a workflow by hand (`gh workflow run`) on a branch or tag, with its inputs.
     Dispatch { slug: String, file: String, git_ref: String, inputs: Vec<(String, String)> },
     /// Undo the last project setup recorded in the repository (see `setup_record`).
@@ -153,6 +156,7 @@ impl Op {
             Op::Setup { .. } => "set up",
             Op::UndoSetup => "undo setup",
             Op::Dispatch { .. } => "workflow run",
+            Op::NewWorkflow { .. } => "new workflow",
             Op::Tag { .. } => "tag",
             Op::PushTag(_) => "push tag",
             Op::DeleteTag { .. } => "delete tag",
@@ -660,6 +664,51 @@ fn setup(repo: &Path, plan: &Plan, commit: bool) -> Result<String, String> {
     Ok(lines.join("\n"))
 }
 
+/// Writes `.github/workflows/<file>`. With `publish` it then commits only that file, pushes the branch and, with
+/// `dispatch`, starts the workflow; GitHub needs a moment to know a workflow it was just pushed, so starting is retried.
+fn new_workflow(repo: &Path, file: &str, text: &str, publish: bool, message: &str, dispatch: Option<&(String, String)>) -> Result<String, String> {
+    if file.is_empty() || file.contains('/') || file.starts_with('.') {
+        return Err(format!("invalid workflow file name '{file}'"));
+    }
+    let rel = format!("{}/{file}", crate::workflow::DIR);
+    let dir = repo.join(crate::workflow::DIR);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    std::fs::write(repo.join(&rel), text).map_err(|e| format!("cannot write {rel}: {e}"))?;
+    let mut lines = vec![format!("wrote {rel}")];
+    if !publish {
+        lines.push("N then Enter runs it once it is pushed".to_string());
+        return Ok(lines.join("\n"));
+    }
+    let remote = default_remote(repo).ok_or("no remote to push to")?;
+    let steps = run_all(repo, &["add", "--", &rel])
+        .and_then(|_| run_all(repo, &["commit", "-m", message, "--", &rel]))
+        .and_then(|_| run_all(repo, &["push", &remote, "HEAD"]));
+    if let Err(e) = steps {
+        lines.push(format!("committing or pushing failed: {e}"));
+        return Err(lines.join("\n"));
+    }
+    lines.push(format!("committed and pushed to {remote}"));
+    if let Some((slug, git_ref)) = dispatch {
+        let mut last = String::new();
+        for attempt in 0..6 {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_secs(4));
+            }
+            match crate::github::gh_all(Some(repo), &["workflow", "run", file, "-R", slug, "--ref", git_ref]) {
+                Ok(out) => {
+                    lines.push(format!("started: {}", out.lines().next().unwrap_or("")));
+                    return Ok(lines.join("\n"));
+                }
+                Err(e) => last = e,
+            }
+        }
+        lines.push(format!("pushed, but GitHub would not start it yet ({}): press N, then Enter on it", last.lines().next().unwrap_or("")));
+    } else {
+        lines.push("pushed: it runs on its triggers".to_string());
+    }
+    Ok(lines.join("\n"))
+}
+
 // ---- undoing a setup ----
 
 /// What the last setup made: the top-level entries of the folder (the repository was empty before) and, if it
@@ -809,6 +858,7 @@ pub fn perform(repo: &Path, op: &Op) -> Result<String, String> {
         Op::Commit(msg) => run_all(repo, &["commit", "-m", msg]),
         Op::Setup { plan, commit } => setup(repo, plan, *commit),
         Op::UndoSetup => undo_setup(repo),
+        Op::NewWorkflow { file, text, publish, message, dispatch } => new_workflow(repo, file, text, *publish, message, dispatch.as_ref()),
         Op::Dispatch { file, git_ref, .. } if file.is_empty() || file.starts_with('-') || git_ref.starts_with('-') => {
             Err(format!("invalid workflow '{file}' or ref '{git_ref}'"))
         }

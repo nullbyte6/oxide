@@ -112,3 +112,124 @@ pub(super) fn draw_run_form(f: &mut Frame, app: &mut App) {
     }
     f.render_widget(Paragraph::new(lines), inner);
 }
+
+/// The wizard that writes a new workflow: a popup per page, the compiled file on the last one.
+pub(super) fn draw_wizard(f: &mut Frame, app: &mut App) {
+    use crate::app::WStep;
+    use crate::workflow::{Kind, TOOLCHAINS};
+    let Some(w) = app.wizard.as_mut() else { return };
+    let area = f.area();
+    let page = match w.step {
+        WStep::Kind => "what for",
+        WStep::Toolchain => "language",
+        WStep::Triggers => "when it runs",
+        WStep::Options => "options",
+        WStep::Details => "details",
+        WStep::Preview => "preview",
+    };
+    // Rows of the page, plus the lines around them (borders and the error line).
+    let rows = match w.step {
+        WStep::Kind => Kind::ALL.len(),
+        WStep::Toolchain => TOOLCHAINS.len(),
+        WStep::Triggers | WStep::Options => w.checks.len(),
+        WStep::Details => w.details.len(),
+        WStep::Preview => area.height as usize,
+    };
+    let width = if w.step == WStep::Preview { 110 } else { 96 }.min(area.width);
+    let h = (rows as u16 + 4).clamp(7, area.height.saturating_sub(2).max(7)).min(area.height);
+    let [_, mid, _] = Layout::vertical([Constraint::Fill(1), Constraint::Length(h), Constraint::Fill(1)]).areas(area);
+    let [_, popup, _] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(width), Constraint::Fill(1)]).areas(mid);
+    f.render_widget(Clear, popup);
+    let block = pane(format!(" New workflow · {} · {page} ", w.name), true);
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+    let [body, err] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
+    if let Some(e) = &w.error {
+        f.render_widget(Paragraph::new(Span::styled(format!("✗ {e}"), hue(BOLD, BAD))), err);
+    }
+
+    match w.step {
+        WStep::Kind => {
+            let note_w = (body.width as usize).saturating_sub(16);
+            let items: Vec<ListItem> = Kind::ALL
+                .iter()
+                .map(|k| ListItem::new(Line::from(vec![Span::styled(fit(k.name(), 15), BOLD), Span::styled(fit(k.note(), note_w), DIM)])))
+                .collect();
+            f.render_stateful_widget(List::new(items).highlight_style(INVERSE), body, &mut w.kind_state);
+        }
+        WStep::Toolchain => {
+            let items: Vec<ListItem> = TOOLCHAINS
+                .iter()
+                .enumerate()
+                .map(|(i, (_, name, _))| {
+                    let mut spans = vec![Span::styled(fit(name, 32), BOLD)];
+                    if w.detected == Some(i) {
+                        spans.push(Span::styled("◀ this repository looks like it", hue(PLAIN, GOOD)));
+                    }
+                    ListItem::new(Line::from(spans))
+                })
+                .collect();
+            f.render_stateful_widget(List::new(items).highlight_style(INVERSE), body, &mut w.tool_state);
+        }
+        WStep::Triggers | WStep::Options => {
+            let hint_w = (body.width as usize).saturating_sub(30);
+            let items: Vec<ListItem> = w
+                .checks
+                .iter()
+                .map(|c| {
+                    let (mark, style) = if c.on { ("[x]", hue(BOLD, GOOD)) } else { ("[ ]", PLAIN) };
+                    ListItem::new(Line::from(vec![
+                        Span::styled(mark, style),
+                        Span::styled(format!(" {}", fit(&c.label, 26)), BOLD),
+                        Span::styled(fit(&c.hint, hint_w), DIM),
+                    ]))
+                })
+                .collect();
+            f.render_stateful_widget(List::new(items).highlight_style(INVERSE), body, &mut w.check_state);
+        }
+        WStep::Details => {
+            let label_w = w.details.iter().map(|d| d.label.len()).max().unwrap_or(4);
+            let help_w = (body.width as usize).saturating_sub(label_w + 30).max(8);
+            let lines: Vec<Line> = w
+                .details
+                .iter()
+                .enumerate()
+                .map(|(i, d)| {
+                    let here = i == w.cursor;
+                    let mut spans = vec![
+                        Span::styled(if here { "▸ " } else { "  " }, hue(BOLD, ACCENT)),
+                        Span::styled(format!("{:<label_w$} ", d.label), if here { hue(BOLD, ACCENT) } else { BOLD }),
+                        Span::styled(d.value.clone(), if here { BOLD } else { PLAIN }),
+                    ];
+                    if here {
+                        spans.push(Span::styled("█", PLAIN));
+                    }
+                    spans.push(Span::styled(format!("   {}", fit(&d.help, help_w).trim_end()), DIM));
+                    Line::from(spans)
+                })
+                .collect();
+            f.render_widget(Paragraph::new(lines), body);
+        }
+        WStep::Preview => {
+            let total = w.yaml.lines().count();
+            let [head, text] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(body);
+            let top = if w.exists {
+                Line::from(Span::styled(fit(&format!("! {}/{} exists and will be replaced", crate::workflow::DIR, w.file), body.width as usize), hue(BOLD, WARN)))
+            } else {
+                Line::from(Span::styled(format!("→ {}/{}   ({total} lines)", crate::workflow::DIR, w.file), DIM))
+            };
+            f.render_widget(Paragraph::new(top), head);
+            w.height = text.height as usize;
+            w.scroll = w.scroll.min(total.saturating_sub(w.height));
+            let lines: Vec<Line> = w
+                .yaml
+                .lines()
+                .enumerate()
+                .skip(w.scroll)
+                .take(w.height)
+                .map(|(i, l)| Line::from(vec![Span::styled(format!("{:>3} ", i + 1), DIM), Span::styled(l.to_string(), PLAIN)]))
+                .collect();
+            f.render_widget(Paragraph::new(lines), text);
+        }
+    }
+}
