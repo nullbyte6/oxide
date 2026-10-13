@@ -109,6 +109,7 @@ oxide [OPTIONS] [PATH...]
 | `S` | Find GitHub repositories and clone them (see below) |
 | `e` | Open [yazi](https://yazi-rs.github.io) in the repository, with the highlighted file revealed when the changes list is focused. Open files from yazi with your usual opener (e.g. nvim). Without yazi installed it falls back to `$VISUAL` / `$EDITOR` |
 | `K` | New project in an empty repository: language, build tool, license, then a plan to confirm (`c` toggles a first commit, `Esc` goes back a page) |
+| `X` | Undo the last project setup of the selected repository (see "New project") |
 | `t` / `T` | Open the embedded terminal (`$SHELL`) in the repository, or, with the changes list focused, in the folder of the highlighted file (each folder has its own shell, named in the title); `Ctrl+T` hides it, `Shift+PgUp` / `Shift+PgDn` scroll its history, `exit` closes it |
 | `o` | Open the repository folder in the file manager (`xdg-open`) |
 | `m` | Merge a branch into the current one (empty input merges the upstream) |
@@ -368,13 +369,22 @@ outside the scan roots disappears on the next full rescan (`R`), so add its fold
 5. **Confirm**: every command and file, in order, and the programs that are not installed (their commands are
    skipped). `c` ticks *Add initial commit and projects' initial files*, which stays off unless you tick it.
 
-`Enter` on the last page does the work on a background thread, with one log line per step. The project name is
+`Enter` on the last page does the work on a background thread, with one log line per step. **`X` undoes it** (see below). The project name is
 the directory's name. Besides what the language needs (`cargo init`, `pom.xml`, `src/`, `go mod init` ...) it
 writes a `.gitignore` for the language, merged into any the tools made, a `README.md` unless a tool made one,
 and the `LICENSE`. A directory that would stay empty gets a `.gitkeep`, since Git does not keep empty ones.
 If a step fails the rest is not run and the log says which one; the files made so far stay.
 
 Add languages, or replace a built-in one of the same name, with `languages` in `config.lua` (see below).
+
+**Undoing a setup.** When a setup finishes, Oxide records what it made in `oxide-setup` inside the git directory:
+the top-level entries of the folder (it was empty before) and the first commit, if you asked for one. `X` reads
+that record, asks with the exact entries, the number of files and the changes made since, and after a `y`
+removes them, drops the setup commit and leaves the repository empty again (`K` works again). The commit is not
+lost at once: its hash is logged and `git branch rescue <hash>` brings it back until git cleans up. It refuses
+when commits were made after the setup, when the files are already gone, and when nothing was recorded, and it
+never touches anything that was not in the folder when the setup ended. A setup that failed halfway can be
+undone the same way.
 
 **Checking the setups.** `oxide --check-setups` (optionally followed by words that language names must contain,
 like `oxide --check-setups java rust`) sets up every variant of the menu in a temporary folder, exactly as the
