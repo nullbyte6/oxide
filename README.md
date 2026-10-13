@@ -113,7 +113,7 @@ oxide [OPTIONS] [PATH...]
 | `R` | Rescan all roots |
 | `Ctrl+R`, `F5` | Reload the selected repository by hand (changes are also picked up on their own) |
 | `w` | Refresh the CI status of the repositories in view (see below) |
-| `:` / `Ctrl+P` | Command palette: starts empty, type a few letters of any action (GitHub ones included: `clone`, `issues`, `browser` ...) (fuzzy matched), `↑` `↓` pick, `Enter` runs it, `Esc` clears the query and a second `Esc` closes it |
+| `:` / `Ctrl+K` | Command palette: starts empty, type a few letters of any action (GitHub ones included: `clone`, `issues`, `browser` ...) (fuzzy matched), `↑` `↓` pick, `Enter` runs it, `Esc` clears the query and a second `Esc` closes it |
 | `l` | Hide / show the log panel. While it is hidden, each new log message takes the bottom row for a few seconds so results and errors are not missed |
 | `h` | Hide / show the key bar at the bottom (the row goes back to the panels; prompts still use it) |
 | `?` | Help |

@@ -1522,7 +1522,7 @@ fn draw_help(f: &mut Frame) {
         ("r", "remotes: add / change URL / rename / remove / fetch one"),
         ("R / w", "rescan all roots / refresh CI states"),
         ("Ctrl+R, F5", "reload the selected repository (changes are also picked up on their own)"),
-        (": / Ctrl+P", "command palette: type to find any action, Enter runs it"),
+        (": / Ctrl+K", "command palette: type to find any action, Enter runs it"),
         ("h l C", "hide the key bar / hide the log panel / toggle colors"),
         ("? / q", "this help (any key closes it) / quit"),
         ("↑n ↓n ★ ⊘", "ahead · behind · pinned · ignored"),

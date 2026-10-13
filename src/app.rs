@@ -1249,7 +1249,7 @@ impl App {
             KeyCode::Char('h') => self.hints = !self.hints,
             KeyCode::Char('l') => self.logs = !self.logs,
             KeyCode::Char(':') => self.open_palette(),
-            KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => self.open_palette(),
+            KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => self.open_palette(),
             KeyCode::Down | KeyCode::Char('j') => self.move_sel(1),
             KeyCode::Up | KeyCode::Char('k') => self.move_sel(-1),
             KeyCode::PageDown => self.move_sel(10),

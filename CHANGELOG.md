@@ -17,6 +17,7 @@ All notable changes to Oxide are recorded here, newest version first.
 - Update the PHP variant to write `composer.json` (with the PSR-4 autoload for the chosen namespace) and `src/Greeter.php` itself instead of running `composer init`, so it needs no installed tool.
 - Update the Dart variant to write `pubspec.yaml`, `bin/<name>.dart`, `lib/<name>.dart` and `test/` itself instead of running `dart create`, which takes the package name from the directory and fails for names such as `my-app`.
 - Update the R variant to a package (`DESCRIPTION`, `NAMESPACE`, `R/hello.R`) instead of loose scripts, and the Perl variant to put its code in a module under `lib/` that `script/main.pl` loads.
+- Update the command palette shortcut from `Ctrl+P` to `Ctrl+K` (`:` still works); inside the palette `Ctrl+N` / `Ctrl+P` still move the selection.
 - Update `t` to open the embedded terminal instead of suspending Oxide to run `$SHELL` outside it.
 
 ## [0.1.0] - 2026-10-12
