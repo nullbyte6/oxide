@@ -13,9 +13,11 @@ use std::{
 };
 
 mod flows;
+mod stage;
 mod view;
 
 pub use flows::WStep;
+pub use stage::LinePick;
 pub use view::{CodeView, PickerView, Prompt};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -212,6 +214,8 @@ pub struct DiffView {
     pub height: usize,
     /// True when the file has both staged and unstaged changes, so `Tab` can switch between them.
     pub both: bool,
+    /// Line mode (`v`), when some lines of a hunk are being picked.
+    pub pick: Option<LinePick>,
     /// The mode to return to when the viewer closes (the dashboard, or the commit log).
     back: Mode,
     id: u64,
@@ -1101,6 +1105,7 @@ impl App {
                             Ok(text) => {
                                 view.diff = Some(diff::parse(&text, &view.file));
                                 view.raw = text;
+                                view.pick = None; // the rows are new
                             }
                             Err(e) => view.error = Some(e),
                         }
@@ -1499,6 +1504,7 @@ impl App {
             hscroll: 0,
             height: 20,
             both,
+            pick: None,
             back,
             id: self.diff_id,
         });
@@ -2411,6 +2417,9 @@ impl App {
             self.mode = Mode::Normal;
             return;
         };
+        if v.pick.is_some() {
+            return self.on_pick_key(key);
+        }
         let page = v.height.saturating_sub(1).max(1);
         let max = v.diff.as_ref().map_or(0, |d| d.rows.len().saturating_sub(v.height));
         match key.code {
@@ -2442,11 +2451,13 @@ impl App {
                     v.kind = if v.kind == DiffKind::Staged { DiffKind::Unstaged } else { DiffKind::Staged };
                     self.diff_id += 1;
                     v.id = self.diff_id;
-                    (v.diff, v.error, v.scroll, v.hscroll) = (None, None, 0, 0);
+                    (v.diff, v.error, v.scroll, v.hscroll, v.pick) = (None, None, 0, 0, None);
                     worker::spawn_diff(v.repo.clone(), v.file.clone(), v.kind, v.id, self.tx.clone());
                 }
             }
             KeyCode::Char('e') => self.edit_from_diff(),
+            KeyCode::Char('v') => self.start_pick(),
+            KeyCode::Char('x') => self.discard_hunk(),
             // Stage the hunk at the top of the screen (unstaged view), or unstage it (staged view).
             KeyCode::Char('s') => {
                 if !v.stageable() {

@@ -1,5 +1,7 @@
 //! Parsing of `git diff` output into rows for the diff viewer, with syntax highlighting.
 
+use std::collections::HashSet;
+
 use crate::syntax::{self, State, Tok};
 
 /// A diff longer than this many rows is cut off (the viewer says so).
@@ -68,6 +70,84 @@ pub fn hunk_patch(raw: &str, index: usize) -> Option<String> {
         }
     }
     (!body.is_empty()).then(|| header + &body)
+}
+
+/// The patch for only some lines of hunk `index` of a single-file diff. `picked` holds the offsets of the lines
+/// to act on, counted from the first line after the hunk header. The other changed lines are left alone: for
+/// a forward patch (staging) an unpicked `-` becomes context and an unpicked `+` is dropped; for a reverse patch
+/// (unstaging, or discarding from the working tree) an unpicked `+` becomes context and an unpicked `-` is
+/// dropped. `None` when no changed line is picked.
+pub fn lines_patch(raw: &str, index: usize, picked: &HashSet<usize>, reverse: bool) -> Option<String> {
+    let (mut header, mut head, mut body) = (String::new(), "", Vec::new());
+    let mut seen = 0usize;
+    for line in raw.split_inclusive('\n') {
+        if line.starts_with("@@") {
+            seen += 1;
+            if seen == index + 1 {
+                head = line;
+            }
+            continue;
+        }
+        match seen {
+            0 => header.push_str(line),
+            n if n == index + 1 => body.push(line),
+            _ => {}
+        }
+    }
+    if head.is_empty() {
+        return None;
+    }
+    let (old_start, new_start) = hunk_start(head);
+    let section = head.splitn(3, "@@").nth(2).unwrap_or("\n");
+    let (mut out, mut old_n, mut new_n, mut changes) = (String::new(), 0, 0, 0);
+    // Whether the previous line is in the patch: a "\ No newline" note follows its line or goes away with it.
+    let mut kept = true;
+    for (i, line) in body.iter().enumerate() {
+        let rest = line.get(1..).unwrap_or("");
+        let take = picked.contains(&i);
+        match line.chars().next() {
+            Some('+') if take => {
+                out.push_str(line);
+                new_n += 1;
+                changes += 1;
+                kept = true;
+            }
+            Some('+') if reverse => {
+                out.push(' ');
+                out.push_str(rest);
+                old_n += 1;
+                new_n += 1;
+                kept = true;
+            }
+            Some('-') if take => {
+                out.push_str(line);
+                old_n += 1;
+                changes += 1;
+                kept = true;
+            }
+            Some('-') if !reverse => {
+                out.push(' ');
+                out.push_str(rest);
+                old_n += 1;
+                new_n += 1;
+                kept = true;
+            }
+            Some('+' | '-') => kept = false,
+            Some('\\') => {
+                if kept {
+                    out.push_str(line);
+                }
+            }
+            _ => {
+                out.push_str(line);
+                old_n += 1;
+                new_n += 1;
+                kept = true;
+            }
+        }
+    }
+    let end = if section.ends_with('\n') { "" } else { "\n" };
+    (changes > 0).then(|| format!("{header}@@ -{old_start},{old_n} +{new_start},{new_n} @@{section}{end}{out}"))
 }
 
 /// Parses unified diff text of one file; `file` picks the language used for highlighting.

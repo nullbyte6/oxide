@@ -874,9 +874,22 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     }
     if app.mode == Mode::Diff {
         let both = app.diff.as_ref().is_some_and(|v| v.both);
+        if let Some(v) = app.diff.as_ref().filter(|v| v.pick.is_some()) {
+            let mut hints = vec![("↑↓", "line"), ("Space", "pick"), ("a", "all"), ("s", if v.kind == DiffKind::Staged { "unstage picked" } else { "stage picked" })];
+            if v.kind == DiffKind::Unstaged {
+                hints.push(("x", "discard picked"));
+            }
+            hints.push(("Esc", "back"));
+            f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
+            return;
+        }
         let mut hints = vec![("↑↓", "scroll"), ("Space", "page"), ("[ ]", "hunk"), ("← →", "pan"), ("g G", "top/end")];
         if let Some(v) = app.diff.as_ref().filter(|v| v.stageable()) {
             hints.push(("s", if v.kind == DiffKind::Staged { "unstage hunk" } else { "stage hunk" }));
+            hints.push(("v", "pick lines"));
+            if v.kind == DiffKind::Unstaged {
+                hints.push(("x", "discard hunk"));
+            }
         }
         if both {
             hints.push(("Tab", "staged/unstaged"));
@@ -1050,8 +1063,9 @@ fn code_spans(toks: &[(Tok, String)], mut skip: usize) -> Vec<Span<'static>> {
     spans
 }
 
-/// `current` marks the hunk that `s` would stage or unstage.
-fn diff_line(row: &Row, num_w: usize, hscroll: usize, current: bool) -> Line<'static> {
+/// `current` marks the hunk that `s` would stage or unstage; in line mode `cursor` marks the line under the
+/// cursor and `picked` the lines that `s` would stage.
+fn diff_line(row: &Row, num_w: usize, hscroll: usize, current: bool, cursor: bool, picked: bool) -> Line<'static> {
     let blank = " ".repeat(num_w * 2 + 2);
     match row {
         Row::Meta(s) | Row::Note(s) => Line::from(Span::styled(format!("{blank}{s}"), DIM.add_modifier(Modifier::ITALIC))),
@@ -1062,12 +1076,15 @@ fn diff_line(row: &Row, num_w: usize, hscroll: usize, current: bool) -> Line<'st
         }
         Row::Line { sign, old, new, toks } => {
             let num = |n: &Option<u32>| n.map_or_else(|| " ".repeat(num_w), |n| format!("{n:>num_w$}"));
-            let (mark, style) = match sign {
-                Sign::Add => (" + ", hue(PLAIN.add_modifier(Modifier::REVERSED).add_modifier(Modifier::BOLD), GOOD)),
-                Sign::Del => (" - ", hue(PLAIN.add_modifier(Modifier::REVERSED).add_modifier(Modifier::BOLD), BAD)),
-                Sign::Ctx => ("   ", PLAIN),
+            let (mark, style) = match (sign, picked) {
+                (Sign::Add, false) => (" + ", hue(PLAIN.add_modifier(Modifier::REVERSED).add_modifier(Modifier::BOLD), GOOD)),
+                (Sign::Del, false) => (" - ", hue(PLAIN.add_modifier(Modifier::REVERSED).add_modifier(Modifier::BOLD), BAD)),
+                (Sign::Add, true) => ("[+]", hue(PLAIN.add_modifier(Modifier::REVERSED).add_modifier(Modifier::BOLD), GOOD)),
+                (Sign::Del, true) => ("[-]", hue(PLAIN.add_modifier(Modifier::REVERSED).add_modifier(Modifier::BOLD), BAD)),
+                (Sign::Ctx, _) => ("   ", PLAIN),
             };
-            let mut spans = vec![Span::styled(format!("{} {} ", num(old), num(new)), DIM), Span::styled(mark, style), Span::raw(" ")];
+            let pointer = if cursor { Span::styled("▸", hue(BOLD, ACCENT)) } else { Span::raw(" ") };
+            let mut spans = vec![Span::styled(format!("{} {} ", num(old), num(new)), DIM), Span::styled(mark, style), pointer];
             spans.extend(code_spans(toks, hscroll));
             Line::from(spans)
         }
@@ -1110,17 +1127,25 @@ fn draw_diff(f: &mut Frame, app: &mut App) {
         Some(k) if v.stageable() => format!(" · hunk {}/{}", k + 1, d.hunks.len()),
         _ => String::new(),
     };
-    let marked = if v.stageable() { hunk.map(|k| d.hunks[k]) } else { None };
+    let marked = if v.stageable() { v.pick.as_ref().map(|p| p.hunk).or(hunk).map(|k| d.hunks[k]) } else { None };
+    let lines_label = v.pick.as_ref().map(|p| format!(" · picked {}/{}", p.picked.len(), v.changed(p.hunk).len())).unwrap_or_default();
     block = block.title_top(
         Line::from(vec![
             Span::styled(format!(" +{}", d.added), hue(BOLD, GOOD)),
             Span::styled(format!(" −{}", d.removed), hue(BOLD, BAD)),
-            Span::styled(format!("{hunk_label} · {}-{last}/{} ", v.scroll + 1, d.rows.len()), DIM),
+            Span::styled(format!("{hunk_label}{lines_label} · {}-{last}/{} ", v.scroll + 1, d.rows.len()), DIM),
         ])
         .right_aligned(),
     );
-    let mut lines: Vec<Line> =
-        d.rows[v.scroll..last].iter().enumerate().map(|(k, r)| diff_line(r, d.num_w, v.hscroll, marked == Some(v.scroll + k))).collect();
+    let mut lines: Vec<Line> = d.rows[v.scroll..last]
+        .iter()
+        .enumerate()
+        .map(|(k, r)| {
+            let row = v.scroll + k;
+            let (cursor, picked) = v.pick.as_ref().map_or((false, false), |p| (p.cursor == row, p.picked.contains(&row)));
+            diff_line(r, d.num_w, v.hscroll, marked == Some(row), cursor, picked)
+        })
+        .collect();
     if d.truncated && last == d.rows.len() {
         lines.push(Line::from(Span::styled("… diff cut off after the first rows", DIM.add_modifier(Modifier::ITALIC))));
     }

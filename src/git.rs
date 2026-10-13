@@ -97,8 +97,10 @@ pub enum Op {
     RemoteRemove(String),
     /// Fetch one named remote.
     RemoteFetch(String),
-    /// Apply one hunk of a diff to the index: stage it, or with `reverse` unstage it.
+    /// Apply one hunk of a diff (or some of its lines) to the index: stage it, or with `reverse` unstage it.
     Hunk { patch: String, reverse: bool },
+    /// Undo a patch in the working tree: the hunk (or lines) of an unstaged diff is thrown away for good.
+    Discard { patch: String },
     /// Write a new workflow file; `publish` also commits and pushes it, and `dispatch` (repository, branch) then
     /// starts it for the first time.
     NewWorkflow { file: String, text: String, publish: bool, message: String, dispatch: Option<(String, String)> },
@@ -153,6 +155,7 @@ impl Op {
             Op::Checkout(_) => "checkout",
             Op::Hunk { reverse: false, .. } => "stage hunk",
             Op::Hunk { reverse: true, .. } => "unstage hunk",
+            Op::Discard { .. } => "discard hunk",
             Op::Setup { .. } => "set up",
             Op::UndoSetup => "undo setup",
             Op::Dispatch { .. } => "workflow run",
@@ -961,16 +964,20 @@ pub fn perform(repo: &Path, op: &Op) -> Result<String, String> {
         Op::Reset(rev) | Op::Checkout(rev) if rev.is_empty() || rev.starts_with('-') => Err(format!("invalid target '{rev}'")),
         Op::Reset(rev) => run_all(repo, &["reset", "--keep", rev]),
         Op::Checkout(rev) => run_all(repo, &["checkout", rev, "--"]),
-        Op::Hunk { patch, reverse } => apply_cached(repo, patch, *reverse),
+        Op::Hunk { patch, reverse } => apply_patch(repo, patch, *reverse, true),
+        Op::Discard { patch } => apply_patch(repo, patch, true, false),
         Op::DeleteBranch(name, force) => run_all(repo, &["branch", if *force { "-D" } else { "-d" }, "--", name]),
     }
 }
 
-/// Applies `patch` (a single-file unified diff, fed through stdin) to the index only. `--recount` lets git
-/// trust the hunk body over its header counts; `reverse` undoes a patch that is already in the index.
-fn apply_cached(repo: &Path, patch: &str, reverse: bool) -> Result<String, String> {
+/// Applies `patch` (a single-file unified diff, fed through stdin) to the index (`cached`) or to the working tree.
+/// `--recount` lets git trust the hunk body over its header counts; `reverse` undoes a patch that is already there.
+fn apply_patch(repo: &Path, patch: &str, reverse: bool, cached: bool) -> Result<String, String> {
     use std::io::Write;
-    let mut args = vec!["apply", "--cached", "--recount", "--whitespace=nowarn"];
+    let mut args = vec!["apply", "--recount", "--whitespace=nowarn"];
+    if cached {
+        args.push("--cached");
+    }
     if reverse {
         args.push("-R");
     }
