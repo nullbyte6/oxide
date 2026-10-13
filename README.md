@@ -5,7 +5,7 @@ Oxide finds every repository on your machine, shows the state of all of them in 
 screen, and lets you stage, commit, push, pull, fetch and merge without leaving it.
 
 ```
-┌─┤ ◆ OXIDE v0.1.0 ├───────────────────────── 12 repos · 3 dirty · 2 ahead · 1 behind ┐
+┌─┤ ◆ OXIDE v0.2.0 ├───────────────────────── 12 repos · 3 dirty · 2 ahead · 1 behind ┐
 │  All 12  ┊  Owned 7  ┊  Cloned 5                                                     │
 └──────────────────────────────────────────────────────────────────────────────────────┘
 ┏─┤ Repositories · all (12) ├━━━━━━━━━━━━━━━┓ ┌─┤ oxide ├─────────────────────────────┐
@@ -27,7 +27,7 @@ screen, and lets you stage, commit, push, pull, fetch and merge without leaving 
 - **`git init` anywhere**: initialise a repository in any folder, existing or new, and see it in the list right away.
 - **GitHub** (needs the [`gh`](https://cli.github.com) CLI, logged in): browse a repository's issues and pull requests, read them, diff and check out pull requests, find repositories (yours or anyone's) and clone them, and open things in your browser.
 - **Jump out**: open the selected file or repository in yazi or the file manager.
-- **New project**: `K` in an empty repository opens a menu to set it up for 25 languages (Rust, Python, JavaScript, TypeScript, Go, Java, Kotlin, C, C++, C#, PHP, Ruby, Swift, Dart, Lua, Zig, Elixir, Haskell, Scala, R, Julia, Shell, Nim, Perl, Clojure): pick the language (type to filter), the build tool where there is a choice (Maven by default for Java), a license (11 offered, holder and year filled in) and review the exact commands and files before anything is done. *Other / manual…* opens the embedded terminal instead.
+- **New project**: `K` in an empty repository opens a menu to set it up for 25 languages (Rust, Python, JavaScript, TypeScript, Go, Java, Kotlin, C, C++, C#, PHP, Ruby, Swift, Dart, Lua, Zig, Elixir, Haskell, Scala, R, Julia, Shell, Nim, Perl, Clojure): pick the language (type to filter), the build tool where there is a choice (Maven by default for Java), a license (11 offered, holder and year filled in) and review the exact commands and files before anything is done; the setup then runs in the background, with an optional first commit. *Other / manual…* opens the embedded terminal instead.
 - **Embedded terminal**: `t` / `T` opens a shell inside Oxide, in the selected repository, on a pseudo-terminal with colors, full-screen programs and scrollback; `Ctrl+T` hides it and the shell keeps running.
 - **Always current**: Oxide watches every repository's `.git` and the selected repository's working tree (Linux inotify, no extra dependency), so commits, checkouts and edits made elsewhere show up on their own; an optional timer fetches every repository.
 - **Languages**: what each repository is written in, by share of bytes and in each language's GitHub colour, counted locally from the committed files (no network, no linguist download).
@@ -317,6 +317,27 @@ repositories are not scanned.
 a folder that does not exist is created. The new repository appears in the list and is selected. A repository
 outside the scan roots disappears on the next full rescan (`R`), so add its folder as a `root` to keep it.
 
+### New project
+
+`K` on an empty repository (nothing in it but `.git`) opens a menu with four pages; `Esc` goes back one page.
+
+1. **Language**: 25 languages, narrowed by typing. *Other / manual…* closes the menu and opens the embedded
+   terminal in the repository, for anything the menu does not cover.
+2. **Variant**: only for languages with a real choice, such as Maven, Gradle (Groovy) or Gradle (Kotlin DSL)
+   for Java (Maven is the default), `venv` or `uv` for Python, `npm`, `pnpm` or Bun for JavaScript.
+3. **License**: MIT, Apache-2.0, GPL-3.0, AGPL-3.0, LGPL-3.0, BSD-2-Clause, BSD-3-Clause, MPL-2.0, ISC,
+   Unlicense, CC0-1.0 or none. `Tab` edits the copyright holder (your global `user.name` by default).
+4. **Confirm**: every command and file, in order, and the programs that are not installed (their commands are
+   skipped). `c` ticks *Add initial commit and projects' initial files*, which stays off unless you tick it.
+
+`Enter` on the last page does the work on a background thread, with one log line per step. The project name is
+the directory's name. Besides what the language needs (`cargo init`, `pom.xml`, `src/`, `go mod init` ...) it
+writes a `.gitignore` for the language, merged into any the tools made, a `README.md` unless a tool made one,
+and the `LICENSE`. A directory that would stay empty gets a `.gitkeep`, since Git does not keep empty ones.
+If a step fails the rest is not run and the log says which one; the files made so far stay.
+
+Add languages, or replace a built-in one of the same name, with `languages` in `config.lua` (see below).
+
 ### Diff viewer
 
 `d` opens the highlighted file's diff full screen: untracked files are shown as entirely added, and a file
@@ -423,6 +444,23 @@ clone_dir = "~/dev"
 -- also covers every repository below it)
 pin = { "oxide" }
 ignore = { "~/dev/vendor" }
+
+-- languages for the new-project menu (K), added to the built-in ones. A language has a name, optional
+-- .gitignore lines (ignore) and either variants or, for a single setup, run / dirs / files directly.
+-- A variant is done in this order: run (command lines, no shell), dirs, files (path = contents).
+-- Command lines and contents may use {name} (the directory name), {slug} (my-app), {pkg} (my_app)
+-- and {user} (your git user name). A built-in language is replaced by one with the same name.
+languages = {
+  {
+    name = "OCaml",
+    ignore = { "_build/", "*.install" },
+    variants = {
+      { name = "dune", note = "dune init", run = { "dune init project {slug} ." } },
+      { name = "plain", note = "bin/ and test/", dirs = { "test" },
+        files = { ["bin/main.ml"] = 'let () = print_endline "hello"\n' } },
+    },
+  },
+}
 ```
 
 The `*` and `x` keys store their marks in `~/.local/state/oxide/marks` (or `$XDG_STATE_HOME/oxide/marks`),
@@ -478,6 +516,10 @@ run in batch mode unless you set `core.sshCommand`, `GIT_SSH_COMMAND` or `GIT_SS
 | `src/diff.rs` | Parses `git diff` output into rows for the diff viewer |
 | `src/syntax.rs` | Dependency-free syntax highlighter used by the diff viewer |
 | `src/langs.rs` | Built-in language table (extensions, colours) and the per-repository language count |
+| `src/term.rs` | Embedded terminal: a shell on a pseudo-terminal, parsed by `vt100`, and the encoding of keys for it |
+| `src/scaffold.rs` | New-project menu data: languages and variants, the plan built from a choice, and running it |
+| `src/ignore.rs` | `.gitignore` templates per language family |
+| `src/license.rs` | License list and the text of each (`src/licenses/` holds the long ones) |
 | `src/watch.rs` | inotify file watching of `.git` directories and the selected working tree |
 | `src/repo.rs` | Repository model, discovery, owned/cloned classification |
 | `src/worker.rs` | Background scan and operation threads |

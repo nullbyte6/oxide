@@ -2,11 +2,14 @@
 
 All notable changes to Oxide are recorded here, newest version first.
 
-## [Unreleased] - 2026-10-13
+## [0.2.0] - 2026-10-13
 
 ### Added
 - Add an embedded terminal (`src/term.rs`): `T` opens a shell in the selected repository on a pseudo-terminal (`portable-pty`) parsed by a `vt100` screen and drawn full-screen with the shell's own colors, cursor and full-screen programs; `Ctrl+T` hides it while the shell keeps running, `Shift+PgUp` / `Shift+PgDn` scroll 5000 lines of history, and `exit` closes it and reloads the repository.
-- Add the new-project menu (`K`, also in the command palette) for empty repositories: a language page with a type-to-filter box and an *Other / manual…* row that opens the embedded terminal, a variant page for languages with several build tools, a license page with an editable holder and the year, and a confirmation page listing every command and file plus an opt-in first commit. Running the plan is not wired up yet. It builds on: 25 languages with their variants in `src/scaffold.rs`, short `.gitignore` templates per language family in `src/ignore.rs`, 11 licenses in `src/license.rs` (full texts under `src/licenses/`), and a `Plan` that resolves a choice into the exact commands, directories and files, leaves out commands whose program is not installed and refuses anything but an empty repository.
+- Add the new-project menu (`K`, also in the command palette) for empty repositories: a language page with a type-to-filter box and an *Other / manual…* row that opens the embedded terminal, a variant page for languages with several build tools, a license page with an editable holder and the year, and a confirmation page listing every command and file plus an opt-in first commit. It builds on: 25 languages with their variants in `src/scaffold.rs`, short `.gitignore` templates per language family in `src/ignore.rs`, 11 licenses in `src/license.rs` (full texts under `src/licenses/`), and a `Plan` that resolves a choice into the exact commands, directories and files, leaves out commands whose program is not installed and refuses anything but an empty repository.
+- Add the setup itself: `Enter` on the confirmation page runs the plan on a background thread (`Op::Setup`, so the repository shows the running indicator and reloads when done) with one log line per step, stops at the first failing step and says which one. Files are written as the plan says: replaced, kept when a tool already made them (`README.md`), or merged line by line (`.gitignore`, so `cargo init`'s own entries are not duplicated); ticking the commit option runs `git add -A` and commits with the message `Add initial commit and projects' initial files`.
+- Add a `languages` option to `config.lua` for the new-project menu: a list of tables with a `name`, optional `ignore` lines and `key`, and either `variants` or `run` / `dirs` / `files` directly. They are added after the built-in languages, or replace the one with the same name; an entry that does not fit is skipped and the first problem is logged.
+- Add `portable-pty` and `vt100` as dependencies for the embedded terminal.
 
 ### Changed
 - Update `t` to open the embedded terminal instead of suspending Oxide to run `$SHELL` outside it.
