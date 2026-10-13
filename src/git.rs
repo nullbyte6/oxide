@@ -87,6 +87,14 @@ pub enum Op {
     PruneWorktrees,
     /// Initialise and update a submodule (an empty path means all of them, recursively).
     UpdateSubmodule(String),
+    /// `git remote add`.
+    RemoteAdd { name: String, url: String },
+    /// Point an existing remote at another URL.
+    RemoteSetUrl { name: String, url: String },
+    RemoteRename { old: String, new: String },
+    RemoteRemove(String),
+    /// Fetch one named remote.
+    RemoteFetch(String),
     /// Apply one hunk of a diff to the index: stage it, or with `reverse` unstage it.
     Hunk { patch: String, reverse: bool },
 }
@@ -116,6 +124,11 @@ impl Op {
             Op::RemoveWorktree { .. } => "worktree remove",
             Op::PruneWorktrees => "worktree prune",
             Op::UpdateSubmodule(_) => "submodule update",
+            Op::RemoteAdd { .. } => "remote add",
+            Op::RemoteSetUrl { .. } => "remote set-url",
+            Op::RemoteRename { .. } => "remote rename",
+            Op::RemoteRemove(_) => "remote remove",
+            Op::RemoteFetch(_) => "remote fetch",
             Op::Amend(_) => "amend",
             Op::Reset(_) => "reset",
             Op::Checkout(_) => "checkout",
@@ -389,6 +402,35 @@ pub fn tree_blobs(repo: &Path) -> Result<Vec<(String, u64)>, String> {
         .collect())
 }
 
+/// A configured remote.
+pub struct Remote {
+    pub name: String,
+    pub url: String,
+    /// The push URL when it differs from the fetch URL.
+    pub push_url: Option<String>,
+}
+
+/// Every remote with its URLs, from `git remote -v`.
+pub fn remotes(repo: &Path) -> Result<Vec<Remote>, String> {
+    let out = run(repo, &["remote", "-v"])?;
+    let mut list: Vec<Remote> = Vec::new();
+    // Lines look like `origin<TAB>git@github.com:me/repo.git (fetch)`, then the same with `(push)`.
+    for line in out.lines() {
+        let Some((name, rest)) = line.split_once('\t') else { continue };
+        let Some((url, kind)) = rest.rsplit_once(' ') else { continue };
+        match kind {
+            "(fetch)" if !list.iter().any(|r| r.name == name) => list.push(Remote { name: name.to_string(), url: url.to_string(), push_url: None }),
+            "(push)" => {
+                if let Some(r) = list.iter_mut().find(|r| r.name == name && r.url != url) {
+                    r.push_url = Some(url.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(list)
+}
+
 /// A linked worktree or a submodule of a repository.
 pub struct TreeItem {
     pub kind: TreeKind,
@@ -550,6 +592,18 @@ pub fn perform(repo: &Path, op: &Op) -> Result<String, String> {
         Op::PruneWorktrees => run_all(repo, &["worktree", "prune", "--verbose"]),
         Op::UpdateSubmodule(p) if p.is_empty() => run_all(repo, &["submodule", "update", "--init", "--recursive"]),
         Op::UpdateSubmodule(p) => run_all(repo, &["submodule", "update", "--init", "--recursive", "--", p]),
+        // Names and URLs that git could read as options are refused before they reach it.
+        Op::RemoteAdd { name: a, url: b } | Op::RemoteSetUrl { name: a, url: b } | Op::RemoteRename { old: a, new: b }
+            if [a, b].iter().any(|v| v.is_empty() || v.starts_with('-') || (v == &a && v.contains(char::is_whitespace))) =>
+        {
+            Err(format!("invalid remote name or URL ('{a}', '{b}')"))
+        }
+        Op::RemoteRemove(n) | Op::RemoteFetch(n) if n.is_empty() || n.starts_with('-') => Err(format!("invalid remote name '{n}'")),
+        Op::RemoteAdd { name, url } => run_all(repo, &["remote", "add", name, url]),
+        Op::RemoteSetUrl { name, url } => run_all(repo, &["remote", "set-url", name, url]),
+        Op::RemoteRename { old, new } => run_all(repo, &["remote", "rename", old, new]),
+        Op::RemoteRemove(name) => run_all(repo, &["remote", "remove", name]),
+        Op::RemoteFetch(name) => run_all(repo, &["fetch", "--prune", name]),
         Op::Amend(msg) if msg.is_empty() => run_all(repo, &["commit", "--amend", "--no-edit"]),
         Op::Amend(msg) => run_all(repo, &["commit", "--amend", "-m", msg]),
         Op::Reset(rev) | Op::Checkout(rev) if rev.is_empty() || rev.starts_with('-') => Err(format!("invalid target '{rev}'")),

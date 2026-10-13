@@ -3,16 +3,18 @@
 //! Every entry names the key of the dashboard action it runs; choosing it feeds that key to the
 //! dashboard, so the palette and the keyboard can never disagree.
 
+use crossterm::event::KeyCode;
+
 pub struct Entry {
     pub name: &'static str,
     /// The key shown next to the entry.
     pub key: &'static str,
-    /// The character the dashboard receives when the entry runs.
-    pub code: char,
+    /// The key the dashboard receives when the entry runs.
+    pub code: KeyCode,
 }
 
 const fn e(name: &'static str, key: &'static str, code: char) -> Entry {
-    Entry { name, key, code }
+    Entry { name, key, code: KeyCode::Char(code) }
 }
 
 pub const ENTRIES: &[Entry] = &[
@@ -53,7 +55,8 @@ pub const ENTRIES: &[Entry] = &[
     e("Filter: cloned repositories", "3", '3'),
     e("Filter: repositories needing attention", "4", '4'),
     e("Search repositories", "/", '/'),
-    e("Reload this repository", "r", 'r'),
+    Entry { name: "Reload this repository", key: "F5", code: KeyCode::F(5) },
+    e("Manage remotes: add, change URL, rename, remove", "r", 'r'),
     e("Rescan all roots", "R", 'R'),
     e("Refresh the CI status of repositories in view", "w", 'w'),
     e("Toggle colors", "C", 'C'),

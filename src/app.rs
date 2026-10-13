@@ -18,7 +18,7 @@ use ratatui::widgets::ListState;
 use crate::{
     config::{self, Config},
     diff::{self, Diff},
-    git::{self, Branch, Commit, DiffKind, Op, ReflogEntry, TreeItem, TreeKind},
+    git::{self, Branch, Commit, DiffKind, Op, ReflogEntry, Remote, TreeItem, TreeKind},
     langs::Breakdown,
     github::{self, Ci, Item, Kind, RepoItem, State},
     logger::{self, Level, Logger},
@@ -222,6 +222,23 @@ pub struct ReflogView {
     id: u64,
 }
 
+/// The remotes of one repository.
+pub struct RemotesView {
+    pub repo: PathBuf,
+    pub name: String,
+    /// None while loading.
+    pub items: Option<Vec<Remote>>,
+    pub error: Option<String>,
+    pub state: ListState,
+    id: u64,
+}
+
+impl RemotesView {
+    fn selected(&self) -> Option<&Remote> {
+        self.items.as_ref()?.get(self.state.selected()?)
+    }
+}
+
 /// The worktrees and submodules of one repository.
 pub struct TreesView {
     pub repo: PathBuf,
@@ -348,6 +365,12 @@ pub enum InputKind {
     Amend,
     /// Branch for a new worktree.
     Worktree,
+    /// `<name> <url>` of a remote to add.
+    RemoteAdd,
+    /// The new URL of the remote in `App::remote_target`.
+    RemoteUrl,
+    /// The new name of the remote in `App::remote_target`.
+    RemoteRename,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -368,6 +391,8 @@ pub enum Mode {
     Reflog,
     /// The worktree and submodule list (`App::trees`) is open.
     Trees,
+    /// The remote list (`App::remotes`) is open.
+    Remotes,
     /// The GitHub issue or pull request list (`App::gh`) is open.
     GitHub,
     /// An issue or pull request opened as text (`App::text`).
@@ -429,6 +454,9 @@ pub struct App {
     pub branches: Option<BranchView>,
     pub reflog: Option<ReflogView>,
     pub trees: Option<TreesView>,
+    pub remotes: Option<RemotesView>,
+    /// The remote an open input line is about (change URL, rename).
+    remote_target: Option<String>,
     /// Why the next commit may be made with the wrong identity (shown next to the commit prompt).
     pub commit_warn: Option<String>,
     /// The message of the commit being made, and of the last one that failed (e.g. rejected by a hook).
@@ -558,6 +586,8 @@ impl App {
             branches: None,
             reflog: None,
             trees: None,
+            remotes: None,
+            remote_target: None,
             commit_warn: None,
             pending_msg: None,
             retry_msg: None,
@@ -609,6 +639,11 @@ impl App {
             return None;
         }
         self.log.last()
+    }
+
+    /// The name of the remote an open input line is about, for its prompt.
+    pub fn remote_name(&self) -> &str {
+        self.remote_target.as_deref().unwrap_or("")
     }
 
     pub fn selected(&self) -> Option<&Repo> {
@@ -751,6 +786,19 @@ impl App {
                     self.lang_busy.remove(&path);
                     self.langs.insert(path, (key, result));
                 }
+                Msg::Remotes { id, result } => {
+                    if let Some(v) = self.remotes.as_mut().filter(|v| v.id == id) {
+                        match result {
+                            Ok(items) => {
+                                let keep = v.state.selected().unwrap_or(0).min(items.len().saturating_sub(1));
+                                v.state.select(if items.is_empty() { None } else { Some(keep) });
+                                v.items = Some(items);
+                                v.error = None;
+                            }
+                            Err(e) => v.error = Some(e),
+                        }
+                    }
+                }
                 Msg::Trees { id, result } => {
                     if let Some(v) = self.trees.as_mut().filter(|v| v.id == id) {
                         match result {
@@ -839,6 +887,9 @@ impl App {
                     if self.reflog.as_ref().is_some_and(|v| v.repo == path) {
                         self.load_reflog(); // the operation added a line to the reflog
                     }
+                    if self.remotes.as_ref().is_some_and(|v| v.repo == path) {
+                        self.load_remotes();
+                    }
                     if self.trees.as_ref().is_some_and(|v| v.main() == path || v.repo == path) {
                         self.load_trees();
                     }
@@ -924,7 +975,7 @@ impl App {
             };
             if since.elapsed() >= TREE_DELAY {
                 self.tree_done = Some(sel.clone());
-                // A tree that cannot be watched (limit reached) just falls back to manual reloads with `r`.
+                // A tree that cannot be watched (limit reached) just falls back to manual reloads with Ctrl+R.
                 std::thread::spawn(move || {
                     let _ = w.watch_tree(&sel);
                 });
@@ -1052,6 +1103,7 @@ impl App {
             Mode::Branches => self.on_branch_key(key),
             Mode::Reflog => self.on_reflog_key(key),
             Mode::Trees => self.on_trees_key(key),
+            Mode::Remotes => self.on_remotes_key(key),
             Mode::GitHub => self.on_gh_key(key),
             Mode::Text => self.on_text_key(key),
             Mode::Finder => self.on_finder_key(key),
@@ -1125,7 +1177,9 @@ impl App {
             KeyCode::Char('/') => self.open_input(InputKind::Search),
             KeyCode::Char('R') => self.start_scan(),
             KeyCode::Char('w') => self.start_ci(true),
-            KeyCode::Char('r') => self.refresh_selected(),
+            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => self.refresh_selected(),
+            KeyCode::F(5) => self.refresh_selected(),
+            KeyCode::Char('r') => self.open_remotes(),
             KeyCode::Char('F') => self.op_selected(Op::Fetch),
             KeyCode::Char('A') => self.fetch_visible(),
             KeyCode::Char('p') => self.op_selected(Op::Pull),
@@ -1296,6 +1350,95 @@ impl App {
             _ => return,
         };
         v.state.select(step(v.state.selected(), len, delta));
+    }
+
+    // ---- remotes ----
+
+    fn open_remotes(&mut self) {
+        let Some((repo, name)) = self.selected().map(|r| (r.path.clone(), r.name.clone())) else { return };
+        self.remotes = Some(RemotesView { repo, name, items: None, error: None, state: ListState::default(), id: 0 });
+        self.mode = Mode::Remotes;
+        self.load_remotes();
+    }
+
+    fn load_remotes(&mut self) {
+        self.diff_id += 1;
+        if let Some(v) = self.remotes.as_mut() {
+            v.id = self.diff_id;
+            worker::spawn_remotes(v.repo.clone(), v.id, self.tx.clone());
+        }
+    }
+
+    fn on_remotes_key(&mut self, key: KeyEvent) {
+        let Some(v) = self.remotes.as_mut() else {
+            self.mode = Mode::Normal;
+            return;
+        };
+        let len = v.items.as_ref().map_or(0, Vec::len);
+        let repo = v.repo.clone();
+        let picked = v.selected().map(|r| (r.name.clone(), r.url.clone()));
+        let delta = match key.code {
+            KeyCode::Esc | KeyCode::Char('q' | 'r') => {
+                self.remotes = None;
+                self.mode = Mode::Normal;
+                return;
+            }
+            KeyCode::Down | KeyCode::Char('j') => 1,
+            KeyCode::Up | KeyCode::Char('k') => -1,
+            KeyCode::Home | KeyCode::Char('g') => -(1 << 30),
+            KeyCode::End | KeyCode::Char('G') => 1 << 30,
+            KeyCode::Char('a') => {
+                self.open_input(InputKind::RemoteAdd);
+                return;
+            }
+            _ => {
+                let Some((name, url)) = picked else {
+                    self.log(Level::Info, "no remote highlighted (press a to add one)");
+                    return;
+                };
+                match key.code {
+                    // Change the URL; the prompt starts with the current one.
+                    KeyCode::Char('e' | 'u') => {
+                        self.remote_target = Some(name);
+                        self.open_input(InputKind::RemoteUrl);
+                        self.input = url;
+                    }
+                    KeyCode::Char('n') | KeyCode::F(2) => {
+                        self.remote_target = Some(name.clone());
+                        self.open_input(InputKind::RemoteRename);
+                        self.input = name;
+                    }
+                    KeyCode::Char('d') => {
+                        let prompt = format!("remove remote {name} ({url})? its remote-tracking branches are deleted too");
+                        self.ask(prompt, vec![(repo, Op::RemoteRemove(name))]);
+                    }
+                    KeyCode::Enter | KeyCode::Char('f') => self.run_ops(vec![(repo, Op::RemoteFetch(name))]),
+                    _ => {}
+                }
+                return;
+            }
+        };
+        v.state.select(step(v.state.selected(), len, delta));
+    }
+
+    /// Runs `op` on the repository whose remotes are open.
+    fn remote_op(&mut self, op: Op) {
+        if let Some(repo) = self.remotes.as_ref().map(|v| v.repo.clone()) {
+            self.run_ops(vec![(repo, op)]);
+        }
+    }
+
+    /// `text` is `<name> <url>`; a lone URL names the repository's first remote `origin`.
+    fn add_remote(&mut self, text: &str) {
+        let mut words = text.split_whitespace();
+        let (first, second) = (words.next(), words.next());
+        let have_any = self.remotes.as_ref().and_then(|v| v.items.as_ref()).is_some_and(|i| !i.is_empty());
+        match (first, second) {
+            (Some(name), Some(url)) => self.remote_op(Op::RemoteAdd { name: name.to_string(), url: url.to_string() }),
+            (Some(url), None) if !have_any => self.remote_op(Op::RemoteAdd { name: "origin".to_string(), url: url.to_string() }),
+            (Some(_), None) => self.log(Level::Warn, "give a name and a URL: <name> <url>"),
+            _ => self.log(Level::Warn, "nothing typed, no remote added"),
+        }
     }
 
     // ---- worktrees and submodules ----
@@ -1952,7 +2095,7 @@ impl App {
                 self.mode = Mode::Normal;
                 if let Some(&(entry, _)) = pick {
                     // Run the entry exactly as if its key had been pressed on the dashboard.
-                    let code = KeyCode::Char(palette::ENTRIES[entry].code);
+                    let code = palette::ENTRIES[entry].code;
                     self.on_normal_key(KeyEvent::new(code, KeyModifiers::NONE));
                 }
                 return;
@@ -2037,7 +2180,7 @@ impl App {
 
     fn open_input(&mut self, kind: InputKind) {
         self.input = if kind == InputKind::Search { self.search.clone() } else { String::new() };
-        self.input_back = if matches!(self.mode, Mode::Branches | Mode::Finder | Mode::Trees) { self.mode } else { Mode::Normal };
+        self.input_back = if matches!(self.mode, Mode::Branches | Mode::Finder | Mode::Trees | Mode::Remotes) { self.mode } else { Mode::Normal };
         self.mode = Mode::Input(kind);
     }
 
@@ -2078,6 +2221,15 @@ impl App {
             }
             InputKind::Amend => self.op_selected(Op::Amend(text)),
             InputKind::Worktree => self.add_worktree(&text),
+            InputKind::RemoteAdd => self.add_remote(&text),
+            InputKind::RemoteUrl => match self.remote_target.take() {
+                Some(name) if !text.is_empty() => self.remote_op(Op::RemoteSetUrl { name, url: text }),
+                _ => self.log(Level::Warn, "empty URL, remote left as it was"),
+            },
+            InputKind::RemoteRename => match self.remote_target.take() {
+                Some(old) if !text.is_empty() && text != old => self.remote_op(Op::RemoteRename { old, new: text }),
+                _ => self.log(Level::Info, "remote name unchanged"),
+            },
             InputKind::Merge => self.op_selected(Op::Merge(text)),
         }
     }

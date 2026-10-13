@@ -23,7 +23,7 @@ use crate::{
     banner,
     diff::{Row, Sign},
     git::{Branch, DiffKind, FileEntry, TreeKind},
-    github::{Ci, Kind},
+    github::{self, Ci, Kind},
     langs::Breakdown,
     logger::{self, Level},
     palette,
@@ -120,6 +120,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Branches => draw_branches(f, app),
         Mode::Reflog => draw_reflog(f, app),
         Mode::Trees => draw_trees(f, app),
+        Mode::Remotes => draw_remotes(f, app),
         Mode::GitHub => draw_github(f, app),
         Mode::Text => draw_text(f, app),
         Mode::Finder => draw_finder(f, app),
@@ -606,6 +607,9 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     if let Mode::Input(kind) = app.mode {
         let prompt = match kind {
             InputKind::Commit => format!("commit message → {} (Tab: type)", app.selected().map_or("", |r| r.name.as_str())),
+            InputKind::RemoteAdd => "add remote: <name> <url> (a lone URL becomes origin when there is none)".to_string(),
+            InputKind::RemoteUrl => format!("new URL of remote {}", app.remote_name()),
+            InputKind::RemoteRename => format!("new name of remote {}", app.remote_name()),
             InputKind::Worktree => "new worktree for branch (created next to the repository, branch made if missing)".to_string(),
             InputKind::Amend => format!("amend last commit of {} (empty = keep message, Tab: type)", app.selected().map_or("", |r| r.name.as_str())),
             InputKind::Merge => format!("merge into {} (empty = upstream)", app.selected().map_or("", |r| r.branch.as_str())),
@@ -657,6 +661,11 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     }
     if app.mode == Mode::Reflog {
         let hints = [("↑↓", "move"), ("u", "undo this entry"), ("Enter", "move branch here"), ("d", "show the commit"), ("Esc", "close")];
+        f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
+        return;
+    }
+    if app.mode == Mode::Remotes {
+        let hints = [("↑↓", "move"), ("a", "add"), ("e", "change URL"), ("n", "rename"), ("d", "remove"), ("Enter", "fetch"), ("Esc", "close")];
         f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
         return;
     }
@@ -917,6 +926,47 @@ fn draw_reflog(f: &mut Frame, app: &mut App) {
         })
         .collect();
     f.render_stateful_widget(List::new(items).block(block).highlight_style(INVERSE), area, &mut v.state);
+}
+
+/// The remotes of a repository as a popup, with the newest log message below it.
+fn draw_remotes(f: &mut Frame, app: &mut App) {
+    let last = app.log.last().map(|l| l.text.clone()).unwrap_or_default();
+    let Some(v) = app.remotes.as_mut() else { return };
+    let rows = v.items.as_ref().map_or(1, Vec::len) as u16;
+    let area = f.area();
+    let w = 110.min(area.width);
+    let h = (rows + 2).clamp(5, area.height.saturating_sub(2).max(5)).min(area.height);
+    let [_, mid, _] = Layout::vertical([Constraint::Fill(1), Constraint::Length(h), Constraint::Fill(1)]).areas(area);
+    let [_, popup, _] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(w), Constraint::Fill(1)]).areas(mid);
+    f.render_widget(Clear, popup);
+    let block = pane(format!(" Remotes · {} ", v.name), true).title_bottom(Line::from(Span::styled(format!(" {last} "), DIM)));
+    let note = |msg: String, f: &mut Frame, block: Block<'static>| {
+        f.render_widget(Paragraph::new(msg).style(DIM.add_modifier(Modifier::ITALIC)).block(block), popup);
+    };
+    if let Some(e) = &v.error {
+        return note(format!("git remote failed: {}", e.lines().next().unwrap_or("")), f, block);
+    }
+    let Some(items) = &v.items else { return note("Loading…".to_string(), f, block) };
+    if items.is_empty() {
+        return note("No remotes: this repository is local only. Press a to add one.".to_string(), f, block);
+    }
+    let url_w = (popup.width as usize).saturating_sub(4 + 14 + 8).max(16);
+    let rows: Vec<ListItem> = items
+        .iter()
+        .map(|r| {
+            let mut spans = vec![
+                Span::styled(fit(&r.name, 13), BOLD),
+                Span::raw(" "),
+                Span::styled(fit(&r.url, url_w), PLAIN),
+                Span::styled(if github::slug(&r.url).is_some() { " github" } else { "       " }, hue(PLAIN, GOOD)),
+            ];
+            if let Some(push) = &r.push_url {
+                spans.push(Span::styled(format!(" push → {push}"), hue(DIM, WARN)));
+            }
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+    f.render_stateful_widget(List::new(rows).block(block).highlight_style(INVERSE), popup, &mut v.state);
 }
 
 /// Worktrees and submodules of a repository, as a popup with the newest log message below it.
@@ -1223,7 +1273,9 @@ fn draw_help(f: &mut Frame) {
         ("i y B S", "GitHub: issues / pull requests / repo in browser / find & clone"),
         ("e / t / o", "yazi on the file or repository / shell / file manager"),
         ("* / x / H", "pin / ignore the repository / show ignored ones"),
-        ("r / R / w", "reload selected repository / rescan all roots / refresh CI states"),
+        ("r", "remotes: add / change URL / rename / remove / fetch one"),
+        ("R / w", "rescan all roots / refresh CI states"),
+        ("Ctrl+R, F5", "reload the selected repository (changes are also picked up on their own)"),
         (": / Ctrl+P", "command palette: type to find any action, Enter runs it"),
         ("h l C", "hide the key bar / hide the log panel / toggle colors"),
         ("? / q", "this help (any key closes it) / quit"),

@@ -38,6 +38,8 @@ pub enum Msg {
     Reflog { id: u64, result: Result<Vec<git::ReflogEntry>, String> },
     /// The language breakdown of a repository at the commit `key` (an error when it has no commits).
     Langs { path: PathBuf, key: String, result: Result<crate::langs::Breakdown, String> },
+    /// The remotes (or the error) requested with the given id.
+    Remotes { id: u64, result: Result<Vec<git::Remote>, String> },
     /// Worktrees and submodules (or the error) requested with the given id.
     Trees { id: u64, result: Result<Vec<git::TreeItem>, String> },
     /// The branch list (or error) requested with the given id.
@@ -182,6 +184,13 @@ pub fn spawn_langs(path: PathBuf, key: String, tx: Sender<Msg>) {
     thread::spawn(move || {
         let result = git::tree_blobs(&path).map(crate::langs::analyze);
         let _ = tx.send(Msg::Langs { path, key, result });
+    });
+}
+
+/// Loads the remotes in the background.
+pub fn spawn_remotes(repo: PathBuf, id: u64, tx: Sender<Msg>) {
+    thread::spawn(move || {
+        let _ = tx.send(Msg::Remotes { id, result: git::remotes(&repo) });
     });
 }
 
