@@ -25,6 +25,7 @@ use crate::{
     git::{Branch, DiffKind, FileEntry, TreeKind},
     github::{self, Ci, Hits, Kind, Scope},
     langs::Breakdown,
+    license::LICENSES,
     logger::{self, Level},
     palette,
     repo::{Health, Owner, Repo},
@@ -158,7 +159,9 @@ fn draw_project(f: &mut Frame, app: &mut App) {
     let (rows, extra) = match v.step {
         ProjectStep::Lang => (v.choices().len(), 4),
         ProjectStep::Variant => (LANGS[v.lang].variants.len(), 3),
-        _ => (0, 0),
+        ProjectStep::License => (LICENSES.len() + 1, 5),
+        // The plan, a line for programs that are missing and the lines around them.
+        ProjectStep::Confirm => (v.plan.as_ref().map_or(0, |p| p.actions.len() + usize::from(!p.missing.is_empty())), 7),
     };
     let h = (rows as u16 + extra).clamp(6, area.height.saturating_sub(2).max(6)).min(area.height);
     let [_, mid, _] = Layout::vertical([Constraint::Fill(1), Constraint::Length(h), Constraint::Fill(1)]).areas(area);
@@ -218,7 +221,49 @@ fn draw_project(f: &mut Frame, app: &mut App) {
                 .collect();
             f.render_stateful_widget(List::new(items).highlight_style(INVERSE), inner, &mut v.variant_state);
         }
-        ProjectStep::License | ProjectStep::Confirm => {}
+        ProjectStep::License => {
+            let [list, holder] = Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).areas(inner);
+            let name_w = (list.width as usize).saturating_sub(15);
+            let mut items: Vec<ListItem> = LICENSES
+                .iter()
+                .map(|l| ListItem::new(Line::from(vec![Span::styled(fit(l.id, 14), BOLD), Span::raw(" "), Span::styled(fit(l.name, name_w), DIM)])))
+                .collect();
+            items.push(ListItem::new(Line::from(vec![Span::styled(fit("None", 14), BOLD), Span::raw(" "), Span::styled(fit("no LICENSE file", name_w), DIM)])));
+            f.render_stateful_widget(List::new(items).highlight_style(INVERSE), list, &mut v.license_state);
+
+            let mut spans = vec![Span::styled("Holder ▸ ", hue(BOLD, ACCENT)), Span::styled(v.holder.clone(), if v.editing { BOLD } else { PLAIN })];
+            spans.push(if v.editing { Span::styled("█", PLAIN) } else { Span::styled("  (Tab edits)", DIM) });
+            spans.push(Span::styled(format!("    Year ▸ {}", v.year), DIM));
+            f.render_widget(Paragraph::new(vec![Line::raw(""), Line::from(spans)]), holder);
+        }
+        ProjectStep::Confirm => {
+            let Some(plan) = &v.plan else { return };
+            let lang = &LANGS[v.lang];
+            let variant = lang.variants[v.variant_state.selected().unwrap_or(0)].name;
+            let license = v.license().map_or("no license", |l| l.id);
+            let mut lines = vec![
+                Line::from(Span::styled(format!("{} · {variant} · {license}", lang.name), BOLD)),
+                Line::from(Span::styled(format!("in {}", v.repo.display()), DIM)),
+                Line::raw(""),
+            ];
+            // Leave room for the rows below the plan: a blank line and the commit option.
+            let room = (inner.height as usize).saturating_sub(lines.len() + 2 + usize::from(!plan.missing.is_empty()));
+            for a in plan.actions.iter().take(room) {
+                let label = a.label();
+                let style = if label.starts_with('$') { hue(PLAIN, ACCENT) } else { PLAIN };
+                lines.push(Line::from(Span::styled(fit(&label, inner.width as usize), style)));
+            }
+            if plan.actions.len() > room {
+                lines.push(Line::from(Span::styled(format!("… and {} more", plan.actions.len() - room), DIM)));
+            }
+            if !plan.missing.is_empty() {
+                lines.push(Line::from(Span::styled(format!("! not installed, skipped: {}", plan.missing.join(", ")), hue(BOLD, WARN))));
+            }
+            lines.push(Line::raw(""));
+            let (mark, style) = if v.commit { ("[x]", hue(BOLD, GOOD)) } else { ("[ ]", PLAIN) };
+            lines.push(Line::from(vec![Span::styled(mark, style), Span::styled(" Add initial commit and projects' initial files", PLAIN)]));
+            f.render_widget(Paragraph::new(lines), inner);
+        }
     }
 }
 
@@ -795,6 +840,17 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    if let (Mode::Project, Some(v)) = (app.mode, &app.project) {
+        let hints: &[(&str, &str)] = match (v.step, v.editing) {
+            (ProjectStep::Lang, _) => &[("↑↓", "move"), ("type", "filter"), ("Enter", "select"), ("Esc", "clear/close")],
+            (ProjectStep::Variant, _) => &[("↑↓", "move"), ("Enter", "select"), ("Esc", "back")],
+            (ProjectStep::License, false) => &[("↑↓", "move"), ("Tab", "edit holder"), ("Enter", "continue"), ("Esc", "back")],
+            (ProjectStep::License, true) => &[("type", "copyright holder"), ("Enter", "done")],
+            (ProjectStep::Confirm, _) => &[("Enter", "set up"), ("c", "toggle first commit"), ("Esc", "back")],
+        };
+        f.render_widget(Paragraph::new(Line::from(hint_spans(hints))), area);
+        return;
+    }
     if app.mode == Mode::History {
         let hints = [("↑↓", "move"), ("Enter", "show the commit"), ("g G", "newest/oldest"), ("Esc", "close")];
         f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
