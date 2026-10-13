@@ -29,6 +29,7 @@ use crate::{
     palette,
     repo::{Health, Owner, Repo},
     syntax::Tok,
+    term::Term,
 };
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -131,6 +132,58 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     if app.mode == Mode::Help {
         draw_help(f);
+    }
+}
+
+/// The embedded terminal, filling the whole screen: the shell's screen is copied cell by cell into the
+/// frame, in the colors the shell asked for. The pseudo-terminal is resized to the room inside the border.
+fn draw_terminal(f: &mut Frame, term: &mut Term, name: &str) {
+    let area = f.area();
+    f.render_widget(Clear, area);
+    let hint = if term.alive() { " Ctrl+T hide · Shift+PgUp/PgDn scroll · exit closes " } else { " shell exited · press any key to close " };
+    let block = pane(format!(" Terminal · {name} "), true).padding(Padding::ZERO).title_bottom(Line::from(Span::styled(hint, DIM)));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    term.resize(inner.height, inner.width);
+
+    let buf = f.buffer_mut();
+    let cursor = term.with_screen(|screen| {
+        for row in 0..inner.height {
+            for col in 0..inner.width {
+                let Some(cell) = screen.cell(row, col) else { continue };
+                if cell.is_wide_continuation() {
+                    continue; // drawn together with the wide character before it
+                }
+                let mut style = Style::new().fg(term_color(cell.fgcolor())).bg(term_color(cell.bgcolor()));
+                for (on, m) in [
+                    (cell.bold(), Modifier::BOLD),
+                    (cell.dim(), Modifier::DIM),
+                    (cell.italic(), Modifier::ITALIC),
+                    (cell.underline(), Modifier::UNDERLINED),
+                    (cell.inverse(), Modifier::REVERSED),
+                ] {
+                    if on {
+                        style = style.add_modifier(m);
+                    }
+                }
+                let text = if cell.has_contents() { cell.contents() } else { " " };
+                buf[(inner.x + col, inner.y + row)].set_symbol(text).set_style(style);
+            }
+        }
+        // The cursor is only shown at the bottom of the history, where the shell is actually typing.
+        (screen.scrollback() == 0 && !screen.hide_cursor()).then(|| screen.cursor_position())
+    });
+    if let Some((row, col)) = cursor {
+        f.set_cursor_position((inner.x + col, inner.y + row));
+    }
+}
+
+/// A color of the shell's screen as a Ratatui color.
+fn term_color(c: vt100::Color) -> Color {
+    match c {
+        vt100::Color::Default => Color::Reset,
+        vt100::Color::Idx(i) => Color::Indexed(i),
+        vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
     }
 }
 
