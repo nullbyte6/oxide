@@ -3,6 +3,7 @@
 mod app;
 mod banner;
 mod check;
+mod code;
 mod config;
 mod diff;
 mod git;

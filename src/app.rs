@@ -13,8 +13,10 @@ use std::{
 };
 
 mod flows;
+mod view;
 
 pub use flows::WStep;
+pub use view::{CodeView, PickerView, Prompt};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::ListState;
@@ -523,6 +525,10 @@ pub enum Mode {
     Text,
     /// GitHub repository search results (`App::finder`).
     Finder,
+    /// The file finder (`App::picker`) is open.
+    Picker,
+    /// The code viewer (`App::code`) is open.
+    Code,
     /// The embedded terminal (`App::terms[App::term]`) is open and gets every key.
     Terminal,
     /// The new-project menu (`App::project`) is open.
@@ -593,6 +599,8 @@ pub struct App {
     pub remotes: Option<RemotesView>,
     pub tags: Option<TagsView>,
     pub workflows: Option<flows::WorkflowsView>,
+    pub picker: Option<PickerView>,
+    pub code: Option<CodeView>,
     pub run_form: Option<flows::RunForm>,
     pub wizard: Option<flows::Wizard>,
     /// The remote an open input line is about (change URL, rename).
@@ -734,6 +742,8 @@ impl App {
             remotes: None,
             tags: None,
             workflows: None,
+            picker: None,
+            code: None,
             run_form: None,
             wizard: None,
             remote_target: None,
@@ -1050,6 +1060,8 @@ impl App {
                         }
                     }
                 }
+                Msg::Files { id, result } => self.files_loaded(id, result),
+                Msg::Code { id, result } => self.code_loaded(id, result),
                 Msg::Diff { id, result } => {
                     if let Some(view) = self.diff.as_mut().filter(|v| v.id == id) {
                         match result {
@@ -1302,6 +1314,8 @@ impl App {
             Mode::Confirm => self.on_confirm_key(key),
             Mode::Palette => self.on_palette_key(key),
             Mode::Diff => self.on_diff_key(key),
+            Mode::Picker => self.on_picker_key(key),
+            Mode::Code => self.on_code_key(key),
             Mode::History => self.on_history_key(key),
             Mode::Branches => self.on_branch_key(key),
             Mode::Reflog => self.on_reflog_key(key),
@@ -1395,6 +1409,7 @@ impl App {
             KeyCode::Char('r') => self.open_remotes(),
             KeyCode::Char('F') => self.op_selected(Op::Fetch),
             KeyCode::Char('A') => self.fetch_visible(),
+            KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => self.open_picker(),
             KeyCode::Char('p') => self.op_selected(Op::Pull),
             KeyCode::Char('P') => self.op_selected(Op::Push),
             KeyCode::Char('a') => self.op_selected(Op::StageAll),
@@ -2467,7 +2482,7 @@ impl App {
                 if let Some(&(entry, _)) = pick {
                     // Run the entry exactly as if its key had been pressed on the dashboard.
                     let code = palette::ENTRIES[entry].code;
-                    self.on_normal_key(KeyEvent::new(code, KeyModifiers::NONE));
+                    self.on_normal_key(KeyEvent::new(code, if palette::ENTRIES[entry].ctrl { KeyModifiers::CONTROL } else { KeyModifiers::NONE }));
                 }
                 return;
             }

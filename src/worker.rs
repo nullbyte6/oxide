@@ -14,6 +14,7 @@ use std::{
 };
 
 use crate::{
+    code,
     config::Config,
     git::{self, DiffKind, Op},
     github,
@@ -68,6 +69,10 @@ pub enum Msg {
     Releases { id: u64, result: Result<std::collections::HashMap<String, github::Release>, String> },
     /// The latest run of each workflow by name (or why that is not known) for the request with the given id.
     WorkflowRuns { id: u64, result: Result<std::collections::HashMap<String, github::WorkflowRun>, String> },
+    /// The files of a repository (or the error) requested with the given id, for the file finder.
+    Files { id: u64, result: Result<Vec<String>, String> },
+    /// A source file read for the code viewer (or the error) requested with the given id.
+    Code { id: u64, result: Result<code::Loaded, String> },
     /// An operation finished.
     Op { path: PathBuf, label: &'static str, result: Result<String, String> },
 }
@@ -170,6 +175,20 @@ pub fn spawn_ci(items: Vec<(PathBuf, String, String)>, tx: Sender<Msg>) {
 pub fn spawn_diff(repo: PathBuf, file: String, kind: DiffKind, id: u64, tx: Sender<Msg>) {
     thread::spawn(move || {
         let _ = tx.send(Msg::Diff { id, result: git::diff(&repo, &file, kind) });
+    });
+}
+
+/// Lists the files of a repository in the background.
+pub fn spawn_files(repo: PathBuf, id: u64, tx: Sender<Msg>) {
+    thread::spawn(move || {
+        let _ = tx.send(Msg::Files { id, result: git::project_files(&repo) });
+    });
+}
+
+/// Reads and highlights one file in the background.
+pub fn spawn_code(repo: PathBuf, file: String, id: u64, tx: Sender<Msg>) {
+    thread::spawn(move || {
+        let _ = tx.send(Msg::Code { id, result: code::load(&repo, &file) });
     });
 }
 

@@ -36,7 +36,7 @@ pub struct Diff {
 }
 
 /// Tabs become spaces and control characters are dropped, so every char is one terminal cell.
-fn clean(s: &str) -> String {
+pub(crate) fn clean(s: &str) -> String {
     s.trim_end_matches('\r').chars().flat_map(|c| if c == '\t' { vec![' '; 4] } else if c.is_control() { vec![] } else { vec![c] }).collect()
 }
 

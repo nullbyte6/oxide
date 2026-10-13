@@ -11,10 +11,16 @@ pub struct Entry {
     pub key: &'static str,
     /// The key the dashboard receives when the entry runs.
     pub code: KeyCode,
+    /// The key is pressed with Ctrl.
+    pub ctrl: bool,
 }
 
 const fn e(name: &'static str, key: &'static str, code: char) -> Entry {
-    Entry { name, key, code: KeyCode::Char(code) }
+    Entry { name, key, code: KeyCode::Char(code), ctrl: false }
+}
+
+const fn c(name: &'static str, key: &'static str, code: char) -> Entry {
+    Entry { name, key, code: KeyCode::Char(code), ctrl: true }
 }
 
 pub const ENTRIES: &[Entry] = &[
@@ -23,6 +29,7 @@ pub const ENTRIES: &[Entry] = &[
     e("Unstage all changes", "u", 'u'),
     e("Commit staged changes", "c", 'c'),
     e("Show the diff of the highlighted file", "d", 'd'),
+    c("Find a file by name and read it", "Ctrl+P", 'p'),
     e("Show the commit log", "v", 'v'),
     e("Amend the last commit", "E", 'E'),
     e("Reflog: see and undo what happened to HEAD", "O", 'O'),
@@ -59,7 +66,7 @@ pub const ENTRIES: &[Entry] = &[
     e("Filter: cloned repositories", "3", '3'),
     e("Filter: repositories needing attention", "4", '4'),
     e("Search repositories", "/", '/'),
-    Entry { name: "Reload this repository", key: "F5", code: KeyCode::F(5) },
+    Entry { name: "Reload this repository", key: "F5", code: KeyCode::F(5), ctrl: false },
     e("Manage remotes: add, change URL, rename, remove", "r", 'r'),
     e("Rescan all roots", "R", 'R'),
     e("Refresh the CI status of repositories in view", "w", 'w'),
@@ -89,7 +96,7 @@ pub fn matches(query: &str) -> Vec<(usize, Vec<usize>)> {
 
 /// Subsequence match of `q` (lowercase) in `text`: every query character must appear in order.
 /// Consecutive matches and matches at the start of a word score higher.
-fn fuzzy(q: &[char], text: &str) -> Option<(i32, Vec<usize>)> {
+pub(crate) fn fuzzy(q: &[char], text: &str) -> Option<(i32, Vec<usize>)> {
     let chars: Vec<char> = text.chars().collect();
     let (mut at, mut score, mut from) = (Vec::new(), 0, 0);
     for &want in q {

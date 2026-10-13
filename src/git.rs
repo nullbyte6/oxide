@@ -215,6 +215,15 @@ fn run(repo: &Path, args: &[&str]) -> Result<String, String> {
     if ok { Ok(out) } else { Err(err) }
 }
 
+/// Every file of `repo` that git tracks, or could add (untracked and not ignored), sorted. Deleted files are left out.
+pub fn project_files(repo: &Path) -> Result<Vec<String>, String> {
+    let out = run(repo, &["ls-files", "-z", "--cached", "--others", "--exclude-standard"])?;
+    let mut files: Vec<String> = out.split('\0').filter(|p| !p.is_empty() && repo.join(p).is_file()).map(str::to_string).collect();
+    files.sort();
+    files.dedup();
+    Ok(files)
+}
+
 /// Runs git and returns stdout plus stderr (git reports progress and results on stderr).
 fn run_all(repo: &Path, args: &[&str]) -> Result<String, String> {
     let (ok, out, err) = exec(repo, args)?;

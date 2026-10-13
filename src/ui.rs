@@ -6,6 +6,7 @@
 //! turning colors off (`C`, `color = false` in config.lua or `NO_COLOR`) leaves the monochrome look unchanged.
 
 mod flows;
+mod view;
 
 use std::sync::{
     OnceLock,
@@ -121,6 +122,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     };
     match view {
         Mode::Diff => draw_diff(f, app),
+        Mode::Picker => view::draw_picker(f, app),
+        Mode::Code => view::draw_code(f, app),
         Mode::History => draw_history(f, app),
         Mode::Branches => draw_branches(f, app),
         Mode::Reflog => draw_reflog(f, app),
@@ -806,7 +809,7 @@ fn draw_log(f: &mut Frame, app: &App, area: Rect) {
 /// The bottom row shows the key bar unless `h` hid it. Prompts (text input, confirmations) always need it,
 /// and so does a message that is shown for a moment while the log panel is hidden.
 fn footer_height(app: &App) -> u16 {
-    u16::from(app.hints || app.toast().is_some() || matches!(app.mode, Mode::Input(_) | Mode::Confirm))
+    u16::from(app.hints || app.toast().is_some() || matches!(app.mode, Mode::Input(_) | Mode::Confirm) || app.code.as_ref().is_some_and(|c| c.prompt.is_some()))
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
@@ -855,6 +858,20 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    if let (Mode::Code, Some(v)) = (app.mode, &app.code) {
+        if let Some((kind, text)) = &v.prompt {
+            f.render_widget(Paragraph::new(view::code_prompt(*kind, text)), area);
+        } else {
+            let hints = [("↑↓", "line"), ("Space", "page"), ("/ n N", "find"), (":", "go to line"), ("← →", "pan"), ("g G", "top/end"), ("Esc", "close")];
+            f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
+        }
+        return;
+    }
+    if app.mode == Mode::Picker {
+        let hints = [("type", "to filter"), ("↑↓", "move"), ("Enter", "view the file"), ("Esc", "clear/close")];
+        f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
+        return;
+    }
     if app.mode == Mode::Diff {
         let both = app.diff.as_ref().is_some_and(|v| v.both);
         let mut hints = vec![("↑↓", "scroll"), ("Space", "page"), ("[ ]", "hunk"), ("← →", "pan"), ("g G", "top/end")];
@@ -1616,6 +1633,7 @@ fn draw_help(f: &mut Frame) {
         ("L / U", "pull every behind / push every ahead repository in view"),
         ("m z Z", "merge a branch (empty = upstream) / stash all changes / pop the stash"),
         ("d v b I", "diff of the file / commit log / branches / git init in any folder"),
+        ("Ctrl+P", "find a file of the repository by name and read it (/ searches it, : goes to a line)"),
         ("W", "worktrees and submodules: add / remove / go to / update"),
         ("N", "GitHub workflows: run one by hand with its inputs, or write a new one (n)"),
         ("V", "tags and releases: make / push / delete a tag, create a GitHub release"),
