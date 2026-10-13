@@ -110,36 +110,25 @@ pub enum Launch {
     /// The yazi file manager inside `repo`, with `target` revealed. Files are then opened from yazi,
     /// with whatever program its rules choose (e.g. nvim). Without yazi, `$VISUAL` / `$EDITOR` opens `target`.
     Browse { repo: PathBuf, target: PathBuf },
-    /// `$SHELL` inside `repo`.
-    Shell { repo: PathBuf },
 }
 
 impl Launch {
     pub fn repo(&self) -> &Path {
         match self {
-            Launch::Browse { repo, .. } | Launch::Shell { repo } => repo,
+            Launch::Browse { repo, .. } => repo,
         }
     }
 
     /// Runs the program in the foreground and waits for it.
     pub fn run(&self) -> Result<(), String> {
-        let (mut cmd, name) = match self {
-            Launch::Browse { repo, target } => {
-                return match Command::new("yazi").arg(target).current_dir(repo).status() {
-                    Ok(_) => Ok(()),
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                        run_editor(repo, target).map_err(|e| format!("yazi is not installed, and the editor failed: {e}"))
-                    }
-                    Err(e) => Err(format!("cannot run yazi: {e}")),
-                };
+        let Launch::Browse { repo, target } = self;
+        match Command::new("yazi").arg(target).current_dir(repo).status() {
+            Ok(_) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                run_editor(repo, target).map_err(|e| format!("yazi is not installed, and the editor failed: {e}"))
             }
-            Launch::Shell { .. } => {
-                let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/sh".to_string());
-                eprintln!("oxide: shell in {} - exit it to return to the dashboard", self.repo().display());
-                (Command::new(&shell), shell)
-            }
-        };
-        cmd.current_dir(self.repo()).status().map(|_| ()).map_err(|e| format!("cannot run {name}: {e}"))
+            Err(e) => Err(format!("cannot run yazi: {e}")),
+        }
     }
 }
 
@@ -1201,8 +1190,7 @@ impl App {
             KeyCode::Char('L') => self.pull_visible(),
             KeyCode::Char('U') => self.push_visible(),
             KeyCode::Char('e') => self.open_browser(),
-            KeyCode::Char('t') => self.open_shell(),
-            KeyCode::Char('T') => self.open_terminal(),
+            KeyCode::Char('t' | 'T') => self.open_terminal(),
             KeyCode::Char('o') => self.open_files(),
             KeyCode::Char('/') => self.open_input(InputKind::Search),
             KeyCode::Char('R') => self.start_scan(),
@@ -2430,12 +2418,6 @@ impl App {
         // A deleted file no longer exists to reveal; fall back to the repository folder.
         let target = file.map(|f| r.path.join(&f.path)).filter(|p| p.exists()).unwrap_or_else(|| r.path.clone());
         self.launch = Some(Launch::Browse { repo: r.path.clone(), target });
-    }
-
-    fn open_shell(&mut self) {
-        if let Some(r) = self.selected() {
-            self.launch = Some(Launch::Shell { repo: r.path.clone() });
-        }
     }
 
     /// Shows the embedded terminal of the selected repository, starting its shell on first use.

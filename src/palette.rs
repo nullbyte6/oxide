@@ -43,7 +43,7 @@ pub const ENTRIES: &[Entry] = &[
     e("Pop the latest stash", "Z", 'Z'),
     e("git init in a folder", "I", 'I'),
     e("Open in yazi", "e", 'e'),
-    e("Open a shell here", "t", 't'),
+    e("Open the embedded terminal here", "t", 't'),
     e("Open in the file manager", "o", 'o'),
     e("Delete the repository from disk", "D", 'D'),
     e("Pin or unpin the repository", "*", '*'),

@@ -2,6 +2,14 @@
 
 All notable changes to Oxide are recorded here, newest version first.
 
+## [Unreleased] - 2026-10-13
+
+### Added
+- Add an embedded terminal (`src/term.rs`): `T` opens a shell in the selected repository on a pseudo-terminal (`portable-pty`) parsed by a `vt100` screen and drawn full-screen with the shell's own colors, cursor and full-screen programs; `Ctrl+T` hides it while the shell keeps running, `Shift+PgUp` / `Shift+PgDn` scroll 5000 lines of history, and `exit` closes it and reloads the repository.
+
+### Changed
+- Update `t` to open the embedded terminal instead of suspending Oxide to run `$SHELL` outside it.
+
 ## [0.1.0] - 2026-10-12
 
 ### Added
