@@ -6,6 +6,7 @@
 //! turning colors off (`C`, `color = false` in config.lua or `NO_COLOR`) leaves the monochrome look unchanged.
 
 mod flows;
+mod tasks;
 mod view;
 
 use std::sync::{
@@ -22,7 +23,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::{App, Choice, Filter, Focus, InputKind, Mode, ProjectStep},
+    app::{App, Choice, Filter, Focus, InputKind, Mode, ProjectStep, TaskState},
     banner,
     diff::{Row, SRow, Sign},
     git::{Branch, DiffKind, FileEntry, TreeKind},
@@ -124,6 +125,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Diff => draw_diff(f, app),
         Mode::Picker => view::draw_picker(f, app),
         Mode::Code => view::draw_code(f, app),
+        Mode::Tasks => tasks::draw_tasks(f, app),
+        Mode::Task => tasks::draw_task(f, app),
         Mode::History => draw_history(f, app),
         Mode::Branches => draw_branches(f, app),
         Mode::Reflog => draw_reflog(f, app),
@@ -865,6 +868,23 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             let hints = [("↑↓", "line"), ("Space", "page"), ("/ n N", "find"), (":", "go to line"), ("e", "edit"), ("r", "reload"), ("g G", "top/end"), ("Esc", "close")];
             f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
         }
+        return;
+    }
+    if app.mode == Mode::Tasks {
+        let hints = [("↑↓", "move"), ("Enter", "run"), ("o", "last output"), ("Esc", "close")];
+        f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
+        return;
+    }
+    if let (Mode::Task, Some(v)) = (app.mode, &app.task) {
+        let mut hints = vec![("↑↓", "scroll"), ("Space", "page"), ("g G", "top/end"), ("← →", "pan")];
+        if v.state == TaskState::Running {
+            hints.push(("c", "stop"));
+            hints.push(("Esc", "hide"));
+        } else {
+            hints.push(("r", "run again"));
+            hints.push(("Esc", "close"));
+        }
+        f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
         return;
     }
     if app.mode == Mode::Picker {
@@ -1729,6 +1749,7 @@ fn draw_help(f: &mut Frame) {
         ("L / U", "pull every behind / push every ahead repository in view"),
         ("m z Z", "merge a branch (empty = upstream) / stash all changes / pop the stash"),
         ("d v b I", "diff of the file / commit log / branches / git init in any folder"),
+        ("M", "tasks: run a build, test or other command of the repository and watch its output (c stops it)"),
         ("v x m e", "in the diff: pick single lines to stage / discard hunk or lines / side by side / edit the file"),
         ("Ctrl+P", "find a file of the repository by name and read it (/ searches it, : goes to a line)"),
         ("W", "worktrees and submodules: add / remove / go to / update"),

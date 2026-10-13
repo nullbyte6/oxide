@@ -14,10 +14,12 @@ use std::{
 
 mod flows;
 mod stage;
+mod tasks;
 mod view;
 
 pub use flows::WStep;
 pub use stage::LinePick;
+pub use tasks::{TaskState, TaskView, TasksView};
 pub use view::{CodeView, PickerView, Prompt};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -611,6 +613,10 @@ pub enum Mode {
     Picker,
     /// The code viewer (`App::code`) is open.
     Code,
+    /// The task menu (`App::tasks`) is open.
+    Tasks,
+    /// The output of a task (`App::task`) is shown.
+    Task,
     /// The embedded terminal (`App::terms[App::term]`) is open and gets every key.
     Terminal,
     /// The new-project menu (`App::project`) is open.
@@ -682,6 +688,8 @@ pub struct App {
     pub tags: Option<TagsView>,
     pub workflows: Option<flows::WorkflowsView>,
     pub picker: Option<PickerView>,
+    pub tasks: Option<TasksView>,
+    pub task: Option<TaskView>,
     pub code: Option<CodeView>,
     pub run_form: Option<flows::RunForm>,
     pub wizard: Option<flows::Wizard>,
@@ -825,6 +833,8 @@ impl App {
             tags: None,
             workflows: None,
             picker: None,
+            tasks: None,
+            task: None,
             code: None,
             run_form: None,
             wizard: None,
@@ -1144,6 +1154,8 @@ impl App {
                 }
                 Msg::Files { id, result } => self.files_loaded(id, result),
                 Msg::Code { id, result } => self.code_loaded(id, result),
+                Msg::TaskLines { id, lines } => self.task_lines(id, lines),
+                Msg::TaskDone { id, code, secs } => self.task_done(id, code, secs),
                 Msg::Diff { id, result } => {
                     if let Some(view) = self.diff.as_mut().filter(|v| v.id == id) {
                         match result {
@@ -1401,6 +1413,8 @@ impl App {
             Mode::Diff => self.on_diff_key(key),
             Mode::Picker => self.on_picker_key(key),
             Mode::Code => self.on_code_key(key),
+            Mode::Tasks => self.on_tasks_key(key),
+            Mode::Task => self.on_task_key(key),
             Mode::History => self.on_history_key(key),
             Mode::Branches => self.on_branch_key(key),
             Mode::Reflog => self.on_reflog_key(key),
@@ -1485,6 +1499,7 @@ impl App {
             KeyCode::Char('e') => self.open_browser(),
             KeyCode::Char('t' | 'T') => self.open_terminal(),
             KeyCode::Char('K') => self.open_project(),
+            KeyCode::Char('M') => self.open_tasks(),
             KeyCode::Char('X') => self.undo_setup(),
             KeyCode::Char('o') => self.open_files(),
             KeyCode::Char('/') => self.open_input(InputKind::Search),

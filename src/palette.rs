@@ -31,6 +31,7 @@ pub const ENTRIES: &[Entry] = &[
     e("Show the diff of the highlighted file", "d", 'd'),
     c("Find a file by name and read it", "Ctrl+P", 'p'),
     c("Edit the highlighted changed file in your editor", "Ctrl+E", 'e'),
+    e("Run a build, test or other task of the repository", "M", 'M'),
     e("Show the commit log", "v", 'v'),
     e("Amend the last commit", "E", 'E'),
     e("Reflog: see and undo what happened to HEAD", "O", 'O'),

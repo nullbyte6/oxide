@@ -7,6 +7,7 @@
 //! or an interval such as `"10m"`; a bare number counts minutes) `clone_dir` and `editor` (strings; see `App::editor_line`). `pin` / `ignore` take
 //! a repository directory name, or a path when the value contains `/` or starts with `~`. `languages` is a list
 //! of tables that add languages to the new-project menu (`K`) or replace a built-in one; see `read_languages`.
+//! `tasks` is a list of tables that add commands to the task menu (`M`); see `read_tasks`.
 
 use mlua::{Lua, Table, Value};
 use std::{
@@ -17,6 +18,7 @@ use std::{
 use crate::{
     git,
     scaffold::{Lang, PINS, Package, PackageKind, Step, Variant},
+    tasks::Custom,
 };
 
 /// How many directory levels below a root are searched for repositories.
@@ -53,6 +55,8 @@ pub struct Config {
     pub ignores: Vec<String>,
     /// Languages added to the new-project menu (`languages`).
     pub languages: Vec<Lang>,
+    /// Commands added to the task menu (`tasks`).
+    pub tasks: Vec<Custom>,
     /// Versions that replace the defaults of `scaffold::PINS` (`versions`), as `(name, version)`.
     pub versions: Vec<(String, String)>,
     /// False for the automatic whole-machine roots: each mounted drive is its own root, so a scan
@@ -256,6 +260,34 @@ fn read_languages(conf: &Table) -> (Vec<Lang>, Option<String>) {
     (langs, problem)
 }
 
+/// The `tasks` option: a list of tables with a `name`, the command `run` and, to limit it to one repository, `repo`
+/// (a directory name, or a path when it holds a `/` or starts with `~`). A task named like one found in the
+/// project files replaces it. A bad entry is reported and left out.
+fn read_tasks(conf: &Table) -> (Vec<Custom>, Option<String>) {
+    let list = match conf.get::<Value>("tasks") {
+        Ok(Value::Nil) => return (Vec::new(), None),
+        Ok(Value::Table(t)) => t,
+        _ => return (Vec::new(), Some("tasks: expected a list of tables".to_string())),
+    };
+    let (mut tasks, mut problem) = (Vec::new(), None);
+    for (i, entry) in list.sequence_values::<Table>().enumerate() {
+        let one = entry.map_err(|_| "expected a table".to_string()).and_then(|t| {
+            let name = t.get::<String>("name").map_err(|_| "needs a name".to_string())?;
+            let run = t.get::<String>("run").map_err(|_| "needs a run command".to_string())?;
+            if name.trim().is_empty() || name.chars().any(char::is_control) || run.trim().is_empty() {
+                return Err("name and run must not be empty".to_string());
+            }
+            let repo = t.get::<Option<String>>("repo").ok().flatten().filter(|r| !r.trim().is_empty());
+            Ok(Custom { repo, name: name.trim().to_string(), run })
+        });
+        match one {
+            Ok(c) => tasks.push(c),
+            Err(e) => problem = problem.or(Some(format!("tasks[{}]: {e}", i + 1))),
+        }
+    }
+    (tasks, problem)
+}
+
 /// Seconds in an interval such as `30s`, `10m` or `1h`; a bare number counts minutes and `off` means 0.
 fn parse_interval(val: &str) -> Option<u64> {
     let val = val.trim().to_lowercase();
@@ -281,6 +313,7 @@ impl Config {
         let (mut pins, mut ignores) = (Vec::new(), Vec::new());
         let mut languages = Vec::new();
         let mut versions = Vec::new();
+        let mut tasks = Vec::new();
         let mut hints = true;
         let mut logs = true;
         let mut clone_dir = home();
@@ -302,6 +335,9 @@ impl Config {
                     ignores = strings(&conf, "ignore");
                     let (found, problem) = read_languages(&conf);
                     languages = found;
+                    error = error.or(problem);
+                    let (found, problem) = read_tasks(&conf);
+                    tasks = found;
                     error = error.or(problem);
                     let (found, problem) = read_versions(&conf);
                     versions = found;
@@ -359,6 +395,6 @@ impl Config {
         owners.sort();
         owners.dedup();
 
-        Config { error, roots, owners, depth, color, hints, logs, emails, autofetch, ci, clone_dir, editor, pins, ignores, languages, versions, cross_devices: explicit }
+        Config { error, roots, owners, depth, color, hints, logs, emails, autofetch, ci, clone_dir, editor, pins, ignores, languages, tasks, versions, cross_devices: explicit }
     }
 }

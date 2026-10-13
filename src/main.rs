@@ -17,6 +17,7 @@ mod palette;
 mod repo;
 mod scaffold;
 mod syntax;
+mod tasks;
 mod term;
 mod ui;
 mod watch;
