@@ -402,7 +402,8 @@ fn human(bytes: u64) -> String {
     }
 }
 
-/// One line for the details pane: a stacked bar of `cells` cells in the languages' colours and the top three names.
+/// One line for the details pane: a stacked bar of `cells` cells, one segment per language in its colour
+/// (or shade). The names and shares are in the Languages pane.
 fn langs_line(entry: Option<&(String, Result<Breakdown, String>)>, cells: usize) -> Vec<Span<'static>> {
     let note = |msg: &str| vec![Span::styled(msg.to_string(), DIM.add_modifier(Modifier::ITALIC))];
     let bd = match entry {
@@ -424,14 +425,6 @@ fn langs_line(entry: Option<&(String, Result<Breakdown, String>)>, cells: usize)
             spans.push(Span::styled(glyph.repeat(end - drawn), style));
             drawn = end;
         }
-    }
-    for (rank, st) in bd.langs.iter().enumerate().take(3) {
-        let (glyph, style) = lang_mark(rank, st.color);
-        spans.push(Span::styled(format!(" {glyph}"), style));
-        spans.push(Span::styled(format!("{} {}", st.name, percent(bd.percent(st))), PLAIN));
-    }
-    if bd.langs.len() > 3 {
-        spans.push(Span::styled(format!(" +{}", bd.langs.len() - 3), DIM));
     }
     spans
 }
@@ -542,8 +535,8 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
     if let Some(e) = &r.error {
         lines.push(Line::from(Span::styled(format!("error: {}", e.lines().next().unwrap_or("")), hue(BOLD, BAD))));
     } else {
-        // The bar leaves room for the label and the three names after it.
-        let cells = (info_area.width as usize).saturating_sub(4 + 9 + 44).clamp(8, 24);
+        // The bar takes the rest of the line after the label (borders and padding take 4 columns).
+        let cells = (info_area.width as usize).saturating_sub(4 + 9).clamp(8, 60);
         let mut spans = vec![label("langs")];
         spans.extend(langs_line(app.langs.get(&r.path), cells));
         lines.push(Line::from(spans));

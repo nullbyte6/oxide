@@ -187,8 +187,8 @@ With the first entry highlighted, `u` is a one-key undo of the last thing that h
 
 ### Languages
 
-The details panel shows a `langs` line for the selected repository: a stacked bar in each language's colour
-and the top three languages with their share (`Rust 82% · Lua 12% · Shell 3% +2`). `Tab` (or `→`) moves the focus
+The details panel shows a `langs` line for the selected repository: a stacked bar with one segment per
+language in its colour (or shade), without names, so it stays readable at a glance. `Tab` (or `→`) moves the focus
 to the Languages pane, which then fills the panel (the Changes list shrinks to a few rows) with one row per
 language: swatch, name, a bar, the share, the size and the number of files. `↑` `↓` / `g` `G` scroll; `Esc`
 goes back to the list.

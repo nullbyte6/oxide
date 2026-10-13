@@ -43,6 +43,7 @@ All notable changes to Oxide are recorded here, newest version first.
 - Add a worktree and submodule view (`W`): list both with their state, add a worktree for a branch next to the repository, remove one (with a force option), prune stale ones, and update one or all submodules; a new worktree joins the repository list and a removed one leaves it.
 - Add `config.lua`: the config file is now a Lua script (embedded Lua 5.4 through `mlua`, vendored) that sets globals or returns a table; lists are Lua tables, flags are booleans and `autofetch` is `"10m"` or `false`. The old `~/.config/oxide/config` (`key = value`) is no longer read. A script error or a wrong-typed option is logged and the defaults apply.
 - Add language statistics: a `langs` line in the details panel and a focusable Languages pane (`Tab` is now repositories → languages → changes) with each language's share, size, file count and GitHub colour, counted locally by bytes from `git ls-tree` with a built-in extension table (`src/langs.rs`), cached until HEAD moves.
+- Update the `langs` line in the details panel to show only the colored (or shaded) bar, without language names or percentages; those stay in the Languages pane.
 
 ### Fixed
 - Fix the key bar losing its last keys on narrow terminals: hints are now dropped from the middle by importance, always keeping `h`, `?` and `q`.
