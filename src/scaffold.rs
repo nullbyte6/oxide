@@ -9,7 +9,12 @@
 //!
 //! `Plan::build` turns a chosen variant into the exact list of actions, which the project menu shows before running them.
 
-use std::path::Path;
+use std::{
+    collections::HashSet,
+    fs,
+    path::Path,
+    process::{Command, Stdio},
+};
 
 use crate::{ignore, license::License};
 
@@ -361,6 +366,74 @@ impl Plan {
         }
         Plan { name, actions, missing }
     }
+}
+
+impl Plan {
+    /// Does every action inside `root`, in order, and stops at the first one that fails. `say` is called
+    /// with one line per finished action.
+    pub fn apply(&self, root: &Path, mut say: impl FnMut(String)) -> Result<(), String> {
+        for action in &self.actions {
+            match action {
+                Action::Run { program, args } => {
+                    let out = Command::new(program)
+                        .args(args)
+                        .current_dir(root)
+                        .stdin(Stdio::null())
+                        .output()
+                        .map_err(|e| format!("{}: {e}", action.label()))?;
+                    if !out.status.success() {
+                        // Tools explain themselves on stderr; some (npm) use stdout.
+                        let text = String::from_utf8_lossy(if out.stderr.is_empty() { &out.stdout } else { &out.stderr }).trim().to_string();
+                        return Err(format!("{} failed: {}", action.label(), text.lines().last().unwrap_or("no output")));
+                    }
+                }
+                Action::File { path, text, mode } => {
+                    let target = root.join(path);
+                    if let Some(dir) = target.parent() {
+                        fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+                    }
+                    let done = match (mode, target.exists()) {
+                        (Write::IfMissing, true) => Ok(false),
+                        (Write::Merge, true) => {
+                            let old = fs::read_to_string(&target).map_err(|e| format!("cannot read {path}: {e}"))?;
+                            match merge_lines(&old, text) {
+                                Some(merged) => fs::write(&target, merged).map(|()| true),
+                                None => Ok(false),
+                            }
+                        }
+                        _ => fs::write(&target, text).map(|()| true),
+                    };
+                    if !done.map_err(|e| format!("cannot write {path}: {e}"))? {
+                        say(format!("{path}: kept as it was"));
+                        continue;
+                    }
+                }
+            }
+            say(action.label());
+        }
+        Ok(())
+    }
+}
+
+/// `old` with the entries of `template` that it lacks appended, or None when it has them all. The template
+/// is handled in blocks (separated by blank lines) so a comment travels with its entries.
+fn merge_lines(old: &str, template: &str) -> Option<String> {
+    let have: HashSet<&str> = old.lines().map(str::trim).collect();
+    let mut add: Vec<String> = Vec::new();
+    for block in template.split("\n\n") {
+        let entries = |l: &&str| !l.trim().is_empty() && !l.trim_start().starts_with('#');
+        if block.lines().filter(entries).all(|l| have.contains(l.trim())) {
+            continue;
+        }
+        // Keep the block's comments, drop the entries that are already there.
+        let kept: Vec<&str> = block.lines().filter(|l| !(entries(l) && have.contains(l.trim()))).collect();
+        add.push(kept.join("\n"));
+    }
+    if add.is_empty() {
+        return None;
+    }
+    let sep = if old.is_empty() { "" } else if old.ends_with('\n') { "\n" } else { "\n\n" };
+    Some(format!("{old}{sep}{}\n", add.join("\n\n").trim_end()))
 }
 
 /// A repository can be set up when nothing is in it but Git's own `.git` (a folder, or a file in worktrees).
