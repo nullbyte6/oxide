@@ -319,15 +319,19 @@ outside the scan roots disappears on the next full rescan (`R`), so add its fold
 
 ### New project
 
-`K` on an empty repository (nothing in it but `.git`) opens a menu with four pages; `Esc` goes back one page.
+`K` on an empty repository (nothing in it but `.git`) opens a menu with up to five pages; `Esc` goes back one page.
 
 1. **Language**: 25 languages, narrowed by typing. *Other / manual…* closes the menu and opens the embedded
    terminal in the repository, for anything the menu does not cover.
-2. **Variant**: only for languages with a real choice, such as Maven, Gradle (Groovy) or Gradle (Kotlin DSL)
+2. **Package**: only for Java, Kotlin and Scala. Type one or more package names separated by commas (the
+   suggestion is `com.example.<project>`). The first holds the main code; the build tool page and the source
+   directories (`src/main/java/org/acme/app`, plus `src/test/...`) use it, and every further package gets its
+   own empty folders. Names are checked: dot-separated parts of letters, digits and `_`, none starting with a digit.
+3. **Variant**: only for languages with a real choice, such as Maven, Gradle (Groovy) or Gradle (Kotlin DSL)
    for Java (Maven is the default), `venv` or `uv` for Python, `npm`, `pnpm` or Bun for JavaScript.
-3. **License**: MIT, Apache-2.0, GPL-3.0, AGPL-3.0, LGPL-3.0, BSD-2-Clause, BSD-3-Clause, MPL-2.0, ISC,
+4. **License**: MIT, Apache-2.0, GPL-3.0, AGPL-3.0, LGPL-3.0, BSD-2-Clause, BSD-3-Clause, MPL-2.0, ISC,
    Unlicense, CC0-1.0 or none. `Tab` edits the copyright holder (your global `user.name` by default).
-4. **Confirm**: every command and file, in order, and the programs that are not installed (their commands are
+5. **Confirm**: every command and file, in order, and the programs that are not installed (their commands are
    skipped). `c` ticks *Add initial commit and projects' initial files*, which stays off unless you tick it.
 
 `Enter` on the last page does the work on a background thread, with one log line per step. The project name is
@@ -447,6 +451,8 @@ ignore = { "~/dev/vendor" }
 
 -- languages for the new-project menu (K), added to the built-in ones. A language has a name, optional
 -- .gitignore lines (ignore) and either variants or, for a single setup, run / dirs / files directly.
+-- A language that keeps its code in packages sets package (a suggestion); the menu then asks for the names and
+-- steps can use {package} (org.acme.app) and {package_path} (org/acme/app).
 -- A variant is done in this order: run (command lines, no shell), dirs, files (path = contents).
 -- Command lines and contents may use {name} (the directory name), {slug} (my-app), {pkg} (my_app)
 -- and {user} (your git user name). A built-in language is replaced by one with the same name.
