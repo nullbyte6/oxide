@@ -528,21 +528,9 @@ impl Plan {
     /// and the license (when one was chosen) with `holder` and `year` in its copyright line.
     pub fn build(root: &Path, lang: &Lang, variant: &Variant, packages: &[String], license: Option<&License>, holder: &str, year: i64) -> Plan {
         let name = project_name(root);
-        let (pkg, slug, user) = (ident(&name, '_', "app"), ident(&name, '-', "app"), ident(holder, '_', "app"));
-        let pascal_name = pascal(&name);
         // `{package}` is the first package: the one that holds the main code. Directories that mention a
         // package are made for every package, so the others get their (empty) folders too.
-        let fill_for = |s: &str, package: &str| {
-            s.replace("{name}", &name)
-                .replace("{pkg}", &pkg)
-                .replace("{slug}", &slug)
-                .replace("{user}", &user)
-                .replace("{Pascal}", &pascal_name)
-                .replace("{package_path}", &package.replace("::", "/").replace(['.', '\\'], "/").replace('-', "_"))
-                .replace("{PackagePascal}", &pascal(package))
-                .replace("{package_json}", &package.replace('\\', "\\\\"))
-                .replace("{package}", package)
-        };
+        let fill_for = |s: &str, package: &str| fill(root, holder, package, s);
         let main = packages.first().map_or("", String::as_str);
         let fill = |s: &str| fill_for(s, main);
 
@@ -722,6 +710,40 @@ pub fn parse_packages(text: &str, kind: PackageKind) -> Result<Vec<String>, Stri
     }
 }
 
+/// Every placeholder a step may use, for `fill` and for checking the language table.
+pub const PLACEHOLDERS: &[&str] =
+    &["name", "slug", "pkg", "user", "Pascal", "package_path", "PackagePascal", "package_json", "package"];
+
+/// `s` with the placeholders of a project in `root` owned by `holder` filled in; `package` is what `{package}` is.
+pub fn fill(root: &Path, holder: &str, package: &str, s: &str) -> String {
+    let name = project_name(root);
+    s.replace("{name}", &name)
+        .replace("{pkg}", &ident(&name, '_', "app"))
+        .replace("{slug}", &ident(&name, '-', "app"))
+        .replace("{user}", &ident(holder, '_', "app"))
+        .replace("{Pascal}", &pascal(&name))
+        .replace("{package_path}", &package.replace("::", "/").replace(['.', '\\'], "/").replace('-', "_"))
+        .replace("{PackagePascal}", &pascal(package))
+        .replace("{package_json}", &package.replace('\\', "\\\\"))
+        .replace("{package}", package)
+}
+
+/// The words that sit alone between braces in `text` (`{slug}`, not `{ a }` or `{:paths`).
+pub fn braced_words(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(open) = rest.find('{') {
+        rest = &rest[open + 1..];
+        if let Some(close) = rest.find('}')
+            && close > 0
+            && rest[..close].chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            out.push(&rest[..close]);
+        }
+    }
+    out
+}
+
 /// A repository can be set up when nothing is in it but Git's own `.git` (a folder, or a file in worktrees).
 pub fn is_empty(root: &Path) -> bool {
     std::fs::read_dir(root).is_ok_and(|mut entries| entries.all(|e| e.is_ok_and(|e| e.file_name() == ".git")))
@@ -768,7 +790,7 @@ fn ident(s: &str, sep: char, fallback: &str) -> String {
 }
 
 /// `program` is an executable file in one of the `PATH` directories.
-fn on_path(program: &str) -> bool {
+pub fn on_path(program: &str) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::env::var_os("PATH").is_some_and(|paths| {
         std::env::split_paths(&paths).any(|dir| std::fs::metadata(dir.join(program)).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))

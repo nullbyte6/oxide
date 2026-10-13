@@ -2,6 +2,7 @@
 
 mod app;
 mod banner;
+mod check;
 mod config;
 mod diff;
 mod git;
@@ -46,6 +47,9 @@ ARGS:
 
 OPTIONS:
         --list     Print the repository table to stdout and exit (no TUI)
+        --check-setups [LANG...]
+                   Set up every language variant of the new-project menu (only those whose name contains
+                   a LANG, if given) in a temporary folder, build it, and report; exit 1 if any failed
     -h, --help     Show this help
     -V, --version  Show the version
 
@@ -58,6 +62,8 @@ FILES:
 fn main() -> ExitCode {
     let mut paths = Vec::new();
     let mut list = false;
+    let mut check = false;
+    let mut words: Vec<String> = Vec::new();
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "-h" | "--help" => {
@@ -69,15 +75,26 @@ fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
             "--list" => list = true,
+            "--check-setups" => check = true,
             a if a.starts_with('-') => {
                 eprintln!("oxide: unknown option '{a}'\n\n{HELP}");
                 return ExitCode::from(2);
             }
-            a => paths.push(config::expand(a)),
+            a => {
+                words.push(a.to_string());
+                paths.push(config::expand(a));
+            }
         }
     }
     let cfg = Config::load(paths);
     scaffold::register(cfg.languages.clone());
+
+    if check {
+        if let Some(e) = &cfg.error {
+            eprintln!("oxide: config.lua ignored: {e}");
+        }
+        return if check::run(&words) { ExitCode::SUCCESS } else { ExitCode::FAILURE };
+    }
 
     if list {
         if let Some(e) = &cfg.error {
