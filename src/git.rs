@@ -99,6 +99,8 @@ pub enum Op {
     RemoteFetch(String),
     /// Apply one hunk of a diff to the index: stage it, or with `reverse` unstage it.
     Hunk { patch: String, reverse: bool },
+    /// Undo the last project setup recorded in the repository (see `setup_record`).
+    UndoSetup,
     /// Create a tag on HEAD; a message makes it an annotated tag.
     Tag { name: String, message: String },
     /// Push one tag to the repository's remote.
@@ -147,6 +149,7 @@ impl Op {
             Op::Hunk { reverse: false, .. } => "stage hunk",
             Op::Hunk { reverse: true, .. } => "unstage hunk",
             Op::Setup { .. } => "set up",
+            Op::UndoSetup => "undo setup",
             Op::Tag { .. } => "tag",
             Op::PushTag(_) => "push tag",
             Op::DeleteTag { .. } => "delete tag",
@@ -606,20 +609,153 @@ const SETUP_COMMIT: &str = "Add initial commit and projects' initial files";
 /// Does the plan in `repo`, then commits everything when asked. The text is one line per finished step,
 /// and on failure ends with the reason.
 fn setup(repo: &Path, plan: &Plan, commit: bool) -> Result<String, String> {
+    // Everything in the folder besides `.git` is then the setup's, which is what undoing it removes.
+    if !crate::scaffold::is_empty(repo) {
+        return Err("the repository is not empty any more: nothing was done".to_string());
+    }
     let mut lines = Vec::new();
-    if let Err(e) = plan.apply(repo, |l| lines.push(l)) {
+    let applied = plan.apply(repo, |l| lines.push(l));
+    write_record(repo, None); // also after a failure, so what was made can be undone
+    if let Err(e) = applied {
         lines.push(e);
+        lines.push("X undoes what was made".to_string());
         return Err(lines.join("\n"));
     }
     if commit {
         let made = run_all(repo, &["add", "-A"]).and_then(|_| run_all(repo, &["commit", "-m", SETUP_COMMIT]));
         match made {
-            Ok(_) => lines.push(format!("committed: {SETUP_COMMIT}")),
+            Ok(_) => {
+                lines.push(format!("committed: {SETUP_COMMIT}"));
+                write_record(repo, run(repo, &["rev-parse", "HEAD"]).ok().map(|h| h.trim().to_string()).as_deref());
+            }
             Err(e) => {
                 lines.push(format!("the files were made, but the commit failed: {e}"));
                 return Err(lines.join("\n"));
             }
         }
+    }
+    lines.push("X undoes this setup".to_string());
+    Ok(lines.join("\n"))
+}
+
+// ---- undoing a setup ----
+
+/// What the last setup made: the top-level entries of the folder (the repository was empty before) and, if it
+/// made one, the commit. It lives in `oxide-setup` inside the git directory, so it goes with the repository.
+pub struct SetupRecord {
+    pub entries: Vec<String>,
+    pub commit: Option<String>,
+}
+
+fn record_path(repo: &Path) -> Option<PathBuf> {
+    let p = PathBuf::from(run(repo, &["rev-parse", "--git-path", "oxide-setup"]).ok()?.trim());
+    Some(if p.is_absolute() { p } else { repo.join(p) })
+}
+
+/// Records the folder's current top-level entries (and `commit`) as the last setup.
+fn write_record(repo: &Path, commit: Option<&str>) {
+    let Some(path) = record_path(repo) else { return };
+    let mut names: Vec<String> =
+        std::fs::read_dir(repo).into_iter().flatten().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n != ".git").collect();
+    names.sort();
+    let mut text = String::from("oxide-setup 1\n");
+    if let Some(c) = commit {
+        text.push_str(&format!("commit {c}\n"));
+    }
+    for n in names {
+        text.push_str(&format!("entry {n}\n"));
+    }
+    let _ = std::fs::write(path, text);
+}
+
+/// The record of the last setup, if there is one. Entry names that could point outside the folder are dropped.
+pub fn setup_record(repo: &Path) -> Option<SetupRecord> {
+    let text = std::fs::read_to_string(record_path(repo)?).ok()?;
+    let mut rec = SetupRecord { entries: Vec::new(), commit: None };
+    for line in text.lines() {
+        if let Some(c) = line.strip_prefix("commit ") {
+            rec.commit = Some(c.to_string());
+        } else if let Some(n) = line.strip_prefix("entry ")
+            && !n.is_empty()
+            && !n.contains('/')
+            && !matches!(n, "." | ".." | ".git")
+        {
+            rec.entries.push(n.to_string());
+        }
+    }
+    Some(rec)
+}
+
+/// Files below `path` (itself when it is a file); links are counted, not followed.
+fn count_files(path: &Path) -> usize {
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if m.is_dir() => std::fs::read_dir(path).into_iter().flatten().flatten().map(|e| count_files(&e.path())).sum(),
+        Ok(_) => 1,
+        Err(_) => 0,
+    }
+}
+
+/// Whether the setup in `rec` can still be undone: the setup commit has to be the only commit, so nothing built
+/// on it is lost. Returns the entries that are still there.
+fn undo_guard(repo: &Path, rec: &SetupRecord) -> Result<Vec<String>, String> {
+    if let Some(commit) = &rec.commit {
+        let head = run(repo, &["rev-parse", "HEAD"]).map(|h| h.trim().to_string()).unwrap_or_default();
+        let count = run(repo, &["rev-list", "--count", "HEAD"]).ok().and_then(|c| c.trim().parse::<u64>().ok()).unwrap_or(0);
+        if &head != commit || count != 1 {
+            return Err("commits were made after the setup, so it cannot be undone from here".to_string());
+        }
+    }
+    let there: Vec<String> = rec.entries.iter().filter(|n| std::fs::symlink_metadata(repo.join(n)).is_ok()).cloned().collect();
+    if there.is_empty() {
+        return Err("nothing left to undo: the files of the setup are already gone".to_string());
+    }
+    Ok(there)
+}
+
+/// The question to ask before undoing the last setup, or why it cannot be undone.
+pub fn undo_question(repo: &Path, rec: &SetupRecord) -> Result<String, String> {
+    let there = undo_guard(repo, rec)?;
+    let files: usize = there.iter().map(|n| count_files(&repo.join(n))).sum();
+    let shown: Vec<&str> = there.iter().take(4).map(String::as_str).collect();
+    let more = if there.len() > shown.len() { ", …" } else { "" };
+    let mut q = format!("undo the setup: delete {} files ({}{more})", files, shown.join(", "));
+    if rec.commit.is_some() {
+        q.push_str(" and the setup commit (git reflog keeps it)");
+        let changed = run(repo, &["status", "--porcelain"]).map_or(0, |s| s.lines().count());
+        if changed > 0 {
+            q.push_str(&format!(", and {changed} change(s) made since"));
+        }
+    } else {
+        q.push_str("; edits made to them since are lost too");
+    }
+    Ok(q)
+}
+
+/// Removes what the last setup made, leaving the repository empty as it was.
+fn undo_setup(repo: &Path) -> Result<String, String> {
+    let rec = setup_record(repo).ok_or("no setup was recorded for this repository")?;
+    let there = undo_guard(repo, &rec)?;
+    let mut lines = Vec::new();
+    if rec.commit.is_some() {
+        run_all(repo, &["update-ref", "-d", "HEAD"])?;
+        lines.push("removed the setup commit".to_string());
+    }
+    // Drop the files from the index first; untracked ones are simply not there.
+    let mut args = vec!["rm", "-r", "--cached", "--ignore-unmatch", "-q", "--"];
+    args.extend(there.iter().map(String::as_str));
+    let _ = run_all(repo, &args);
+    for name in &there {
+        let path = repo.join(name);
+        let removed = match std::fs::symlink_metadata(&path) {
+            Ok(m) if m.is_dir() => std::fs::remove_dir_all(&path),
+            Ok(_) => std::fs::remove_file(&path),
+            Err(_) => Ok(()),
+        };
+        removed.map_err(|e| format!("cannot remove {name}: {e}"))?;
+        lines.push(format!("removed {name}"));
+    }
+    if let Some(p) = record_path(repo) {
+        let _ = std::fs::remove_file(p);
     }
     Ok(lines.join("\n"))
 }
@@ -646,6 +782,7 @@ pub fn perform(repo: &Path, op: &Op) -> Result<String, String> {
         Op::UnstageAll => run_all(repo, &["reset", "-q"]),
         Op::Commit(msg) => run_all(repo, &["commit", "-m", msg]),
         Op::Setup { plan, commit } => setup(repo, plan, *commit),
+        Op::UndoSetup => undo_setup(repo),
         Op::Tag { name, .. } | Op::PushTag(name) | Op::DeleteTag { name, .. } | Op::Release { tag: name, .. } if name.is_empty() || name.starts_with('-') || name.contains(char::is_whitespace) => {
             Err(format!("invalid tag name '{name}'"))
         }
