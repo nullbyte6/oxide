@@ -413,6 +413,8 @@ pub struct Confirm {
 pub struct Visibility {
     path: PathBuf,
     pub slug: String,
+    /// The repository was missing on a push, so it is pushed to after being created (else fetched).
+    push: bool,
     /// The highlighted choice: private (true) or public (false).
     pub private: bool,
     /// The mode to return to afterwards.
@@ -1196,7 +1198,7 @@ impl App {
                                 self.log(Level::Info, format!("  {}", line.trim()));
                             }
                         }
-                        Err(err) if matches!(label, "fetch" | "remote fetch") && err.contains("Repository not found") && self.offer_create(&path, fetched, &err) => {
+                        Err(err) if matches!(label, "fetch" | "remote fetch" | "push") && err.contains("Repository not found") && self.visibility.is_none() && self.offer_create(&path, label == "push", fetched, &err) => {
                             self.log(Level::Warn, format!("{name}: the remote repository does not exist yet"));
                         }
                         Err(err) => {
@@ -2628,7 +2630,9 @@ impl App {
     /// Asks whether to create the missing GitHub repository behind `path`'s remote; false when the remote is not on GitHub.
     /// The remote is the one a `remote fetch` named; for `fetch --all` it is the one git was fetching
     /// (the last `Fetching <name>` line) when it reported the missing repository, else the default remote.
-    fn offer_create(&mut self, path: &Path, remote: Option<String>, err: &str) -> bool {
+    fn offer_create(&mut self, path: &Path, push: bool, remote: Option<String>, err: &str) -> bool {
+        // A push goes to the upstream's remote, else to the default one.
+        let remote = remote.or_else(|| if push { git::upstream_remote(path).or_else(|| git::default_remote(path)) } else { None });
         let remote = remote.or_else(|| {
             let mut current = None;
             for line in err.lines() {
@@ -2645,7 +2649,7 @@ impl App {
             None => git::remote_url(path),
         };
         let Some(slug) = url.and_then(|u| github::slug(&u)) else { return false };
-        self.visibility = Some(Visibility { path: path.to_path_buf(), slug, private: true, back: self.mode });
+        self.visibility = Some(Visibility { path: path.to_path_buf(), slug, push, private: true, back: self.mode });
         self.mode = Mode::Visibility;
         true
     }
@@ -2664,7 +2668,7 @@ impl App {
                 let v = self.visibility.take().unwrap();
                 self.mode = v.back;
                 self.log(Level::Info, format!("creating {} ({})", v.slug, if v.private { "private" } else { "public" }));
-                self.run_ops(vec![(v.path, Op::CreateRemote { slug: v.slug, private: v.private })]);
+                self.run_ops(vec![(v.path, Op::CreateRemote { slug: v.slug, private: v.private, push: v.push })]);
             }
             KeyCode::Esc => {
                 self.mode = self.visibility.take().map_or(Mode::Normal, |v| v.back);

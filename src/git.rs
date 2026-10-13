@@ -97,8 +97,8 @@ pub enum Op {
     RemoteRemove(String),
     /// Fetch one named remote.
     RemoteFetch(String),
-    /// Create the missing GitHub repository `slug` (private or public), then fetch.
-    CreateRemote { slug: String, private: bool },
+    /// Create the missing GitHub repository `slug` (private or public), then fetch, or with `push` push.
+    CreateRemote { slug: String, private: bool, push: bool },
     /// Apply one hunk of a diff (or some of its lines) to the index: stage it, or with `reverse` unstage it.
     Hunk { patch: String, reverse: bool },
     /// Undo a patch in the working tree: the hunk (or lines) of an unstaged diff is thrown away for good.
@@ -861,11 +861,11 @@ pub fn perform(repo: &Path, op: &Op) -> Result<String, String> {
     match op {
         Op::Fetch => run_all(repo, &["fetch", "--all", "--prune"]),
         Op::CreateRemote { slug, .. } if slug.starts_with('-') => Err(format!("invalid repository '{slug}'")),
-        // Only the empty repository is created here; the local commits are pushed by the user afterwards.
-        Op::CreateRemote { slug, private } => {
+        // The repository is created empty; a push that found it missing then pushes the branch into it.
+        Op::CreateRemote { slug, private, push: pushing } => {
             let made = crate::github::gh_all(Some(repo), &["repo", "create", slug, if *private { "--private" } else { "--public" }])?;
-            let fetched = run_all(repo, &["fetch", "--all", "--prune"])?;
-            Ok(format!("{made}\n{fetched}").trim().to_string())
+            let then = if *pushing { push(repo)? } else { run_all(repo, &["fetch", "--all", "--prune"])? };
+            Ok(format!("{made}\n{then}").trim().to_string())
         }
         // Fast-forward only: Oxide never creates surprise merge commits on pull.
         Op::Pull => run_all(repo, &["pull", "--ff-only"]),
@@ -1038,14 +1038,14 @@ fn delete_repo(path: &Path) -> Result<String, String> {
 
 /// Pushes the current branch, publishing it with `-u` when it has no upstream yet.
 fn push(repo: &Path) -> Result<String, String> {
-    if run(repo, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]).is_ok() {
+    if upstream_remote(repo).is_some() {
         return run_all(repo, &["push"]);
     }
-    let remotes = run(repo, &["remote"])?;
-    let remote = remotes
-        .lines()
-        .find(|r| *r == "origin")
-        .or_else(|| remotes.lines().next())
-        .ok_or("no remote configured")?;
-    run_all(repo, &["push", "-u", remote, "HEAD"])
+    run_all(repo, &["push", "-u", &default_remote(repo).ok_or("no remote configured")?, "HEAD"])
+}
+
+/// The remote a plain `push` goes to: the one of the upstream branch, if the branch has one.
+pub fn upstream_remote(repo: &Path) -> Option<String> {
+    let up = run(repo, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]).ok()?;
+    up.trim().split_once('/').map(|(remote, _)| remote.to_string())
 }
