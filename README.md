@@ -103,6 +103,7 @@ oxide [OPTIONS] [PATH...]
 | `b` | Branches of the selected repository (see below) |
 | `W` | Worktrees and submodules of the selected repository (see below) |
 | `V` | Tags and releases of the selected repository (see below) |
+| `N` | GitHub workflows of the selected repository: start one by hand, or write a new one (see below) |
 | `I` | `git init` in a folder: the prompt starts with the current directory, append a name for a new folder |
 | `i` / `y` | GitHub issues / pull requests of the selected repository (see below) |
 | `B` | Open the selected repository's GitHub page in the browser |
@@ -314,6 +315,49 @@ when they are not in sync). It works from a linked worktree too: the commands th
 
 Linked worktrees are repositories like any other and appear in the list; submodules do not, since nested
 repositories are not scanned.
+
+### GitHub workflows
+
+`N` lists the files of `.github/workflows` (read locally, so it works offline): the workflow's name, its file,
+`manual` when it has a `workflow_dispatch` trigger (so it can be started by hand) or `auto`, and, from `gh`, how its
+latest run went (`✓`, `✗`, `○`, or a spinner while it runs) with its age and branch. Without any workflow the view
+says so and offers to create one.
+
+| Key | Action |
+| --- | --- |
+| `Enter` / `r` | Start the highlighted workflow by hand (`gh workflow run`) |
+| `n` | Write a new workflow with the wizard (below) |
+| `o` | Open it on GitHub |
+| `e` | Edit the file (yazi, or your editor) |
+| `f` | Read the files and ask GitHub for the latest runs again |
+
+**Starting a workflow.** The form has the branch or tag to run (the repository's current branch to begin with)
+and one line per input the workflow declares, read from its `workflow_dispatch: inputs:`: text is typed,
+`type: boolean` is a checkbox (`Space`), `type: choice` cycles its options (`←` `→`), defaults are filled in and
+`required` inputs are marked `*`. `Enter` asks for a `y` first, since a run uses Actions minutes. A workflow without
+`workflow_dispatch` cannot be started this way, and the form warns when the file is new or changed here, because
+GitHub runs the version that is pushed.
+
+**Writing a workflow.** `n` opens a wizard; `Esc` goes back a page and nothing is written until the last one.
+
+1. **What for**: *CI* (build and test on push and pull request), *Release* (build on a `v*` tag and publish a
+   GitHub release with the files), *Scheduled* (build and test on a cron time) or *Manual task* (run a command you
+   type when you start it).
+2. **Language**: Rust, Node.js (npm, yarn or pnpm by lock file), Python, Go, Java (Maven), Java / Kotlin (Gradle,
+   with or without the wrapper), C# (.NET), Ruby, PHP, Elixir, Zig, C / C++ (CMake or Make), Swift, Dart, or
+   commands you type. The one the repository looks like it uses is marked.
+3. **When it runs**: boxes for push, pull request, version tag, schedule and run by hand.
+4. **Options**: boxes for Linux, macOS and Windows (several make a matrix), dependency caching, keeping the build
+   output as an artifact, cancelling obsolete runs and, for a release, publishing it.
+5. **Details**: the name, the file, the branches, the cron time and the command, where they apply.
+6. **Preview**: the finished file with line numbers. `Enter` writes it, and you run it later from `N`. `c` writes it,
+   commits only that file, pushes the branch and, when it can be started by hand and the remote is on GitHub,
+   starts it for the first time (GitHub needs a few seconds to know a new workflow, so starting is retried).
+
+The generated file asks for read-only `contents` permission (the release job alone gets write), and a manual
+task passes the command to the shell through an environment variable instead of pasting it into the script. The
+action versions (`actions/checkout@v4`, `actions/setup-node@v4` ...) are fixed in `src/workflow.rs`, and the Java and
+.NET versions follow the `versions` of `config.lua`.
 
 ### Tags and releases
 
@@ -585,6 +629,7 @@ run in batch mode unless you set `core.sshCommand`, `GIT_SSH_COMMAND` or `GIT_SS
 | `src/term.rs` | Embedded terminal: a shell on a pseudo-terminal, parsed by `vt100`, and the encoding of keys for it |
 | `src/scaffold.rs` | New-project menu data: languages and variants, the plan built from a choice, and running it |
 | `src/check.rs` | `--check-setups`: sets up and builds every variant of the new-project menu in a temporary folder |
+| `src/workflow.rs` | Reads workflow files (name, `workflow_dispatch` inputs) and compiles the wizard's choices into one |
 | `src/ignore.rs` | `.gitignore` templates per language family |
 | `src/license.rs` | License list and the text of each (`src/licenses/` holds the long ones) |
 | `src/watch.rs` | inotify file watching of `.git` directories and the selected working tree |
