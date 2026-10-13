@@ -323,7 +323,10 @@ outside the scan roots disappears on the next full rescan (`R`), so add its fold
 
 1. **Language**: 25 languages, narrowed by typing. *Other / manual…* closes the menu and opens the embedded
    terminal in the repository, for anything the menu does not cover.
-2. **Package**: only for Java, Kotlin and Scala. Type one or more package names separated by commas (the
+2. **Package** (called **module** for Go and **namespace** for C#): only for Java, Kotlin, Scala, Go and C#. For
+   Go it is the module path of `go.mod` (suggested `github.com/<you>/<project>`, used by `go mod init`); for C# the
+   root namespace (suggested `<Project>` in PascalCase), written to the `.csproj` and the source; for the JVM
+   languages, type one or more package names separated by commas (the
    suggestion is `com.example.<project>`). The first holds the main code; the build tool page and the source
    directories (`src/main/java/org/acme/app`, plus `src/test/...`) use it, and every further package gets its
    own empty folders. Names are checked: dot-separated parts of letters, digits and `_`, none starting with a digit.
@@ -452,7 +455,7 @@ ignore = { "~/dev/vendor" }
 -- languages for the new-project menu (K), added to the built-in ones. A language has a name, optional
 -- .gitignore lines (ignore) and either variants or, for a single setup, run / dirs / files directly.
 -- A language that keeps its code in packages sets package (a suggestion); the menu then asks for the names and
--- steps can use {package} (org.acme.app) and {package_path} (org/acme/app).
+-- steps can use {package} (org.acme.app) and {package_path} (org/acme/app). Names are checked like Java's.
 -- A variant is done in this order: run (command lines, no shell), dirs, files (path = contents).
 -- Command lines and contents may use {name} (the directory name), {slug} (my-app), {pkg} (my_app)
 -- and {user} (your git user name). A built-in language is replaced by one with the same name.
