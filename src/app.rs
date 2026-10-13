@@ -122,23 +122,18 @@ pub enum Launch {
     /// The yazi file manager inside `repo`, with `target` revealed. Files are then opened from yazi,
     /// with whatever program its rules choose (e.g. nvim). Without yazi, `$VISUAL` / `$EDITOR` opens `target`.
     Browse { repo: PathBuf, target: PathBuf },
-    /// The editor `editor` (a command line, see `App::editor_line`) on `file` of `repo`, at `line` (1-based).
-    Edit { repo: PathBuf, file: String, line: usize, editor: String },
 }
 
 impl Launch {
     pub fn repo(&self) -> &Path {
         match self {
-            Launch::Browse { repo, .. } | Launch::Edit { repo, .. } => repo,
+            Launch::Browse { repo, .. } => repo,
         }
     }
 
     /// Runs the program in the foreground and waits for it.
     pub fn run(&self) -> Result<(), String> {
-        let (repo, target) = match self {
-            Launch::Browse { repo, target } => (repo, target),
-            Launch::Edit { repo, file, line, editor } => return edit(repo, &repo.join(file), *line, editor),
-        };
+        let Launch::Browse { repo, target } = self;
         match Command::new("yazi").arg(target).current_dir(repo).status() {
             Ok(_) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -149,10 +144,10 @@ impl Launch {
     }
 }
 
-/// Runs the editor command line `spec` on `path`, opened at `line`, and waits for it. `{file}` and `{line}` in the
-/// arguments are replaced; without them the arguments the editor needs for a line are added from its name
-/// (`+12 file` for vi, nano, emacs ...; `file:12` for helix, zed, sublime; `-g file:12` for VS Code).
-fn edit(repo: &Path, path: &Path, line: usize, spec: &str) -> Result<(), String> {
+/// The program and arguments that open `path` at `line` (1-based) for the editor command line `spec`. `{file}` and
+/// `{line}` in the arguments are replaced; without them the arguments the editor needs for a line are added from
+/// its name (`+12 file` for vi, nano, emacs ...; `file:12` for helix, zed, sublime; `-g file:12` for VS Code).
+fn editor_command(path: &Path, line: usize, spec: &str) -> (String, Vec<String>) {
     let mut parts = spec.split_whitespace().map(str::to_string);
     let program = parts.next().unwrap_or_else(|| "vi".to_string());
     let mut args: Vec<String> = parts.collect();
@@ -169,12 +164,7 @@ fn edit(repo: &Path, path: &Path, line: usize, spec: &str) -> Result<(), String>
             _ => args.push(file),
         }
     }
-    Command::new(&program)
-        .args(&args)
-        .current_dir(repo)
-        .status()
-        .map(|_| ())
-        .map_err(|e| format!("cannot run {program}: {e}"))
+    (program, args)
 }
 
 /// The editor when none is configured: `$VISUAL`, then `$EDITOR`, then the first of nvim, vim and vi that is installed.
@@ -3046,12 +3036,12 @@ impl App {
     fn open_terminal_in(&mut self, dir: Option<PathBuf>) {
         let Some(path) = self.selected().map(|r| r.path.clone()) else { return };
         let dir = dir.unwrap_or_else(|| path.clone());
-        let i = match self.terms.iter().position(|t| t.repo == path && t.dir == dir) {
+        let i = match self.terms.iter().position(|t| t.repo == path && t.dir == dir && t.file.is_none()) {
             Some(i) => i,
             None => {
                 // The size is corrected to the real panel by the first frame.
                 let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-                match Term::spawn(&path, &dir, rows.saturating_sub(2), cols.saturating_sub(2)) {
+                match Term::spawn(&path, &dir, None, rows.saturating_sub(2), cols.saturating_sub(2)) {
                     Ok(t) => {
                         self.terms.push(t);
                         self.terms.len() - 1
@@ -3080,12 +3070,35 @@ impl App {
         }
     }
 
-    /// Leaves the terminal for the dashboard; the shell keeps running. Its commands may have changed the repository.
+    /// Leaves the terminal for the screen it was opened from (the dashboard for a shell); the program keeps
+    /// running. Its commands may have changed the repository.
     fn hide_terminal(&mut self) {
+        let shown = self.term.take().and_then(|i| self.terms.get(i)).map(|t| (t.repo.clone(), t.back, t.file.is_some()));
         self.mode = Mode::Normal;
-        if let Some(path) = self.term.take().and_then(|i| self.terms.get(i)).map(|t| t.repo.clone()) {
+        if let Some((path, back, editor)) = shown {
+            self.mode = self.screen(back);
+            if editor {
+                self.log(Level::Info, "the editor keeps running: Ctrl+E on the file shows it again");
+            }
             self.reload(path);
         }
+    }
+
+    /// An editor session is on screen (Oxide's own frame and key bar stay around it).
+    pub fn editor_shown(&self) -> bool {
+        self.mode == Mode::Terminal && self.term.and_then(|i| self.terms.get(i)).is_some_and(|t| t.file.is_some())
+    }
+
+    /// `back` if that screen is still open, else the dashboard.
+    fn screen(&self, back: Mode) -> Mode {
+        let open = match back {
+            Mode::Code => self.code.is_some(),
+            Mode::Diff => self.diff.is_some(),
+            Mode::Task => self.task.is_some(),
+            Mode::Picker => self.picker.is_some(),
+            _ => false,
+        };
+        if open { back } else { Mode::Normal }
     }
 
     /// Drops shells that exited; when the shown one did, the dashboard comes back.
@@ -3093,15 +3106,25 @@ impl App {
         if self.terms.iter().all(Term::alive) {
             return;
         }
-        let shown = self.term.and_then(|i| self.terms.get(i)).map(|t| (t.repo.clone(), t.dir.clone()));
-        let gone: Vec<PathBuf> = self.terms.iter().filter(|t| !t.alive()).map(|t| t.repo.clone()).collect();
+        let shown = self.term.and_then(|i| self.terms.get(i)).map(|t| (t.repo.clone(), t.dir.clone(), t.file.clone()));
+        let was_shown = self.term;
+        // (repository, screen to return to, whether it was an editor) of every program that ended
+        let gone: Vec<(PathBuf, Mode, bool, bool)> =
+            self.terms.iter().enumerate().filter(|(_, t)| !t.alive()).map(|(i, t)| (t.repo.clone(), t.back, t.file.is_some(), was_shown == Some(i))).collect();
         self.terms.retain(Term::alive);
-        self.term = shown.and_then(|(repo, dir)| self.terms.iter().position(|t| t.repo == repo && t.dir == dir));
+        self.term = shown.and_then(|(repo, dir, file)| self.terms.iter().position(|t| t.repo == repo && t.dir == dir && t.file == file));
+        for (path, back, editor, was_open) in gone {
+            if was_open && self.mode == Mode::Terminal && self.term.is_none() {
+                self.mode = self.screen(back);
+            }
+            if editor {
+                self.reload_code(&path); // the file was probably edited
+                self.reload_diff(&path);
+            }
+            self.reload(path);
+        }
         if self.mode == Mode::Terminal && self.term.is_none() {
             self.mode = Mode::Normal;
-        }
-        for path in gone {
-            self.reload(path);
         }
     }
 

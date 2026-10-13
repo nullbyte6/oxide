@@ -26,7 +26,7 @@ screen, and lets you stage, commit, push, pull, fetch and merge without leaving 
 - **Commit log and branches**: browse a repository's history and open any commit's diff; list, switch, create, merge and delete branches, with merged and stale ones flagged.
 - **`git init` anywhere**: initialise a repository in any folder, existing or new, and see it in the list right away.
 - **GitHub** (needs the [`gh`](https://cli.github.com) CLI, logged in): browse a repository's issues and pull requests, read them, diff and check out pull requests, find repositories (yours or anyone's) and clone them, and open things in your browser.
-- **Files and editing**: `Ctrl+P` finds any file of the repository by name (fuzzy, changed files first) and opens it in a read-only viewer with line numbers, highlighting, search and go to line; `e` opens the file in your editor at the cursor line (`Ctrl+E` on the highlighted changed file, `e` in the diff), and Oxide comes back with everything reloaded when the editor exits.
+- **Files and editing**: `Ctrl+P` finds any file of the repository by name (fuzzy, changed files first) and opens it in a read-only viewer with line numbers, highlighting, search and go to line; `e` opens the file in your editor at the cursor line (`Ctrl+E` on the highlighted changed file, `e` in the diff), the editor runs inside Oxide, in a pane under its frame and above its key bar, and the screen you came from comes back, reloaded, when the editor exits.
 - **Tasks**: `M` lists the build, test, lint and run commands the repository offers (found from `Cargo.toml`, `package.json`, `go.mod`, `Makefile`, `justfile`, Gradle, Maven, CMake, .NET, Python and others, plus your own from `config.lua`), runs the one you pick and streams its output; error locations (`src/main.rs:12:5`, Python tracebacks ...) can be stepped through with `n` and opened in the viewer or your editor.
 - **Jump out**: open the selected file or repository in yazi or the file manager.
 - **New project**: `K` in an empty repository opens a menu to set it up for 25 languages (Rust, Python, JavaScript, TypeScript, Go, Java, Kotlin, C, C++, C#, PHP, Ruby, Swift, Dart, Lua, Zig, Elixir, Haskell, Scala, R, Julia, Shell, Nim, Perl, Clojure): pick the language (type to filter), the build tool where there is a choice (Maven by default for Java), a license (11 offered, holder and year filled in) and review the exact commands and files before anything is done; the setup then runs in the background, with an optional first commit. *Other / manual…* opens the embedded terminal instead.
@@ -467,11 +467,11 @@ files up to 2 MB or 50 000 lines (it says when it cuts one off; binary files are
 | `r` | Read the file again |
 | `Esc`, `q` | Close (back to the finder when it came from there) |
 
-The editor runs in the whole terminal, and Oxide returns when it exits. It is `editor` in `config.lua` if
+The editor runs inside Oxide, on a pseudo-terminal like the embedded terminal: it fills the area under Oxide's frame, the key bar stays at the bottom, and every key goes to the editor except `Ctrl+T`, which hides it and shows the screen you started from while the editor keeps running (`Ctrl+E` or `e` on the same file shows it again). Quitting the editor returns to that screen with the file and the diff read again. Oxide answers the questions editors ask their terminal at startup (cursor position, colors, device attributes), and assumes a dark background. It is `editor` in `config.lua` if
 set, else `$VISUAL`, else `$EDITOR`, else the first of nvim, vim and vi that is installed. The line is passed the way the editor expects it: `+12 file`
 for vi, vim, nvim, nano, micro, emacs, kak and gedit; `file:12` for helix, zed and sublime; `-g file:12` for
 VS Code and Cursor. For any other editor use `{file}` and `{line}` in `editor`, for example
-`editor = "kate -l {line} {file}"`. A graphical editor that returns at once is fine; `r` re-reads the file.
+`editor = "kate -l {line} {file}"`. A graphical editor that returns at once is fine too; `r` re-reads the file.
 
 ### Tasks
 

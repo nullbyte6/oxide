@@ -148,10 +148,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         }
         _ => {}
     }
+    // A shell fills the whole screen; an editor is drawn like the other panels, above the key bar.
+    let editor = app.editor_shown();
+    let [body, _] = Layout::vertical([Constraint::Min(0), Constraint::Length(footer_height(app))]).areas(f.area());
     if app.mode == Mode::Terminal
         && let Some(t) = app.term.and_then(|i| app.terms.get_mut(i))
     {
-        draw_terminal(f, t);
+        draw_terminal(f, t, if editor { body } else { f.area() });
     }
     if app.mode == Mode::Palette {
         draw_palette(f, app);
@@ -302,8 +305,7 @@ fn draw_project(f: &mut Frame, app: &mut App) {
 
 /// The embedded terminal, filling the whole screen: the shell's screen is copied cell by cell into the
 /// frame, in the colors the shell asked for. The pseudo-terminal is resized to the room inside the border.
-fn draw_terminal(f: &mut Frame, term: &mut Term) {
-    let area = f.area();
+fn draw_terminal(f: &mut Frame, term: &mut Term, area: Rect) {
     f.render_widget(Clear, area);
     let mut name = term.repo.file_name().map_or_else(|| term.repo.display().to_string(), |n| n.to_string_lossy().into_owned());
     // A shell in a folder of the repository says which one.
@@ -312,8 +314,13 @@ fn draw_terminal(f: &mut Frame, term: &mut Term) {
     {
         name = format!("{name}/{}", rel.display());
     }
-    let hint = " Ctrl+T hide · Shift+PgUp/PgDn scroll · exit closes ";
-    let block = pane(format!(" Terminal · {name} "), true).padding(Padding::ZERO).title_bottom(Line::from(Span::styled(hint, DIM)));
+    let block = match &term.file {
+        // The key bar below the editor already says how to leave it.
+        Some(file) => pane(format!(" Editor · {name}/{file} "), true).padding(Padding::ZERO),
+        None => pane(format!(" Terminal · {name} "), true)
+            .padding(Padding::ZERO)
+            .title_bottom(Line::from(Span::styled(" Ctrl+T hide · Shift+PgUp/PgDn scroll · exit closes ", DIM))),
+    };
     let inner = block.inner(area);
     f.render_widget(block, area);
     term.resize(inner.height, inner.width);
@@ -812,7 +819,7 @@ fn draw_log(f: &mut Frame, app: &App, area: Rect) {
 /// The bottom row shows the key bar unless `h` hid it. Prompts (text input, confirmations) always need it,
 /// and so does a message that is shown for a moment while the log panel is hidden.
 fn footer_height(app: &App) -> u16 {
-    u16::from(app.hints || app.toast().is_some() || matches!(app.mode, Mode::Input(_) | Mode::Confirm) || app.code.as_ref().is_some_and(|c| c.prompt.is_some()))
+    u16::from(app.hints || app.toast().is_some() || matches!(app.mode, Mode::Input(_) | Mode::Confirm) || app.code.as_ref().is_some_and(|c| c.prompt.is_some()) || app.editor_shown())
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
@@ -861,6 +868,11 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    if app.editor_shown() {
+        let hints = [("Ctrl+T", "back to Oxide, the editor keeps running"), ("quit it", "to return to where you were")];
+        f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
+        return;
+    }
     if let (Mode::Code, Some(v)) = (app.mode, &app.code) {
         if let Some((kind, text)) = &v.prompt {
             f.render_widget(Paragraph::new(view::code_prompt(*kind, text)), area);

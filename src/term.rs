@@ -14,6 +14,8 @@ use std::{
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
+use crate::app::Mode;
+
 /// Lines of output kept above the visible screen, reachable with Shift+PageUp.
 const SCROLLBACK: usize = 5000;
 
@@ -23,9 +25,14 @@ pub struct Term {
     pub repo: PathBuf,
     /// The directory the shell was started in: the repository, or a folder inside it.
     pub dir: PathBuf,
+    /// For an editor session, the file it was started on (relative to the repository); None for a shell.
+    pub file: Option<String>,
+    /// The screen to return to when this terminal is hidden or ends.
+    pub back: Mode,
     /// Screen state, fed by the reader thread and read by the UI.
     parser: Arc<Mutex<vt100::Parser>>,
-    writer: Box<dyn Write + Send>,
+    /// Shared with the reader thread, which answers the queries programs send to their terminal.
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
     /// Cleared by the reader thread when the shell closes its side (it exited).
@@ -35,40 +42,59 @@ pub struct Term {
 }
 
 impl Term {
-    /// Starts `$SHELL` (default `/bin/sh`) for `repo`, inside `dir`, with a screen of `rows` x `cols`.
-    pub fn spawn(repo: &Path, dir: &Path, rows: u16, cols: u16) -> Result<Term, String> {
+    /// Starts `command` (a program and its arguments), or `$SHELL` (default `/bin/sh`) when there is none, for
+    /// `repo`, inside `dir`, with a screen of `rows` x `cols`.
+    pub fn spawn(repo: &Path, dir: &Path, command: Option<(String, Vec<String>)>, rows: u16, cols: u16) -> Result<Term, String> {
         let size = PtySize { rows, cols, pixel_width: 0, pixel_height: 0 };
         let pair = native_pty_system().openpty(size).map_err(|e| format!("cannot open a pseudo-terminal: {e}"))?;
 
         let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/sh".to_string());
-        let mut cmd = CommandBuilder::new(&shell);
+        let (program, mut cmd) = match command {
+            Some((program, args)) => {
+                let mut cmd = CommandBuilder::new(&program);
+                cmd.args(&args);
+                cmd.env("COLORTERM", "truecolor");
+                (program, cmd)
+            }
+            None => (shell.clone(), CommandBuilder::new(&shell)),
+        };
         cmd.cwd(dir);
         cmd.env("TERM", "xterm-256color");
-        let child = pair.slave.spawn_command(cmd).map_err(|e| format!("cannot run {shell}: {e}"))?;
+        let child = pair.slave.spawn_command(cmd).map_err(|e| format!("cannot run {program}: {e}"))?;
         drop(pair.slave); // only the shell keeps the slave side, so the reader sees EOF when it exits
 
         let mut reader = pair.master.try_clone_reader().map_err(|e| format!("cannot read the terminal: {e}"))?;
         let writer = pair.master.take_writer().map_err(|e| format!("cannot write to the terminal: {e}"))?;
+        let writer = Arc::new(Mutex::new(writer));
 
         let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, SCROLLBACK)));
         let alive = Arc::new(AtomicBool::new(true));
         {
-            let (parser, alive) = (Arc::clone(&parser), Arc::clone(&alive));
+            let (parser, alive, writer) = (Arc::clone(&parser), Arc::clone(&alive), Arc::clone(&writer));
             thread::spawn(move || {
                 let mut buf = [0u8; 8192];
+                let mut queries = Vec::new();
                 // Read errors (EIO on Linux once the shell is gone) end the session like EOF does.
                 while let Ok(n) = reader.read(&mut buf) {
                     if n == 0 {
                         break;
                     }
-                    if let Ok(mut p) = parser.lock() {
+                    let cursor = parser.lock().ok().map(|mut p| {
                         p.process(&buf[..n]);
+                        p.screen().cursor_position()
+                    });
+                    queries.extend_from_slice(&buf[..n]);
+                    let reply = answer_queries(&mut queries, cursor.unwrap_or((0, 0)));
+                    if !reply.is_empty() {
+                        if let Ok(mut w) = writer.lock() {
+                            let _ = w.write_all(&reply).and_then(|()| w.flush());
+                        }
                     }
                 }
                 alive.store(false, Ordering::Relaxed);
             });
         }
-        Ok(Term { repo: repo.to_path_buf(), dir: dir.to_path_buf(), parser, writer, master: pair.master, child, alive, size: (rows, cols) })
+        Ok(Term { repo: repo.to_path_buf(), dir: dir.to_path_buf(), file: None, back: Mode::Normal, parser, writer, master: pair.master, child, alive, size: (rows, cols) })
     }
 
     /// The shell is still running.
@@ -78,7 +104,8 @@ impl Term {
 
     /// Sends bytes to the shell as if they had been typed.
     pub fn send(&mut self, bytes: &[u8]) {
-        if self.writer.write_all(bytes).and_then(|()| self.writer.flush()).is_err() {
+        let sent = self.writer.lock().map(|mut w| w.write_all(bytes).and_then(|()| w.flush()));
+        if !matches!(sent, Ok(Ok(()))) {
             self.alive.store(false, Ordering::Relaxed);
         }
     }
@@ -128,6 +155,42 @@ impl Drop for Term {
     fn drop(&mut self) {
         let _ = self.child.kill(); // closing Oxide or the session must not leave the shell behind
     }
+}
+
+/// Answers the questions a program asks its terminal in `out` (the output read so far, of which only an unfinished
+/// question at the end is kept): where the cursor is, whether the terminal works, what it is, and the background and
+/// foreground colors (a dark theme is assumed, since the real colors belong to the outer terminal). Without these
+/// replies editors such as Vim and Neovim wait for them at startup.
+fn answer_queries(out: &mut Vec<u8>, cursor: (u16, u16)) -> Vec<u8> {
+    let mut reply = Vec::new();
+    let mut keep = out.len();
+    let mut i = 0;
+    while let Some(at) = out[i..].iter().position(|&b| b == 0x1b) {
+        let start = i + at;
+        let rest = &out[start..];
+        if rest.starts_with(b"\x1b[6n") {
+            reply.extend(format!("\x1b[{};{}R", cursor.0 + 1, cursor.1 + 1).bytes());
+        } else if rest.starts_with(b"\x1b[5n") {
+            reply.extend(b"\x1b[0n");
+        } else if rest.starts_with(b"\x1b[c") || rest.starts_with(b"\x1b[0c") {
+            reply.extend(b"\x1b[?62;c");
+        } else if rest.starts_with(b"\x1b]11;?") || rest.starts_with(b"\x1b]10;?") {
+            // The question ends with BEL or ESC \; until then it may still be arriving.
+            if !rest.contains(&0x07) && !rest.windows(2).any(|w| w == b"\x1b\\") {
+                keep = start;
+                break;
+            }
+            let (code, color) = if rest[2] == b'1' && rest[3] == b'1' { ("11", "0000/0000/0000") } else { ("10", "c0c0/c0c0/c0c0") };
+            reply.extend(format!("\x1b]{code};rgb:{color}\x1b\\").bytes());
+        }
+        i = start + 1;
+    }
+    // An escape sequence cut off at the end of the read may be the start of a question.
+    if keep == out.len() {
+        keep = out.iter().rposition(|&b| b == 0x1b).filter(|&p| out.len() - p < 12).unwrap_or(out.len());
+    }
+    out.drain(..keep);
+    reply
 }
 
 /// The bytes a terminal sends for `key`; empty for keys that have none.

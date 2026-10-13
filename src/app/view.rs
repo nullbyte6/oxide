@@ -345,12 +345,33 @@ impl App {
         if self.cfg.editor.is_empty() { default_editor() } else { self.cfg.editor.clone() }
     }
 
-    /// Opens `file` of `repo` in the editor at `line`; the dashboard comes back when the editor exits.
+    /// Opens `file` of `repo` in the editor at `line`, on a terminal inside Oxide: the frame and the key bar stay
+    /// where they are. The screen it was started from comes back when the editor ends or `Ctrl+T` hides it; an
+    /// editor already open on the file is shown again.
     pub(super) fn start_edit(&mut self, repo: PathBuf, file: String, line: usize) {
-        if !repo.join(&file).is_file() {
+        let path = repo.join(&file);
+        if !path.is_file() {
             return self.log(Level::Warn, format!("{file} does not exist in the working tree"));
         }
-        self.launch = Some(Launch::Edit { repo, file, line, editor: self.editor_line() });
+        let back = self.mode;
+        let i = match self.terms.iter().position(|t| t.repo == repo && t.file.as_deref() == Some(&file)) {
+            Some(i) => i,
+            None => {
+                let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+                let command = editor_command(&path, line, &self.editor_line());
+                match Term::spawn(&repo, &repo, Some(command), rows.saturating_sub(3), cols.saturating_sub(2)) {
+                    Ok(mut t) => {
+                        t.file = Some(file);
+                        self.terms.push(t);
+                        self.terms.len() - 1
+                    }
+                    Err(e) => return self.log(Level::Error, e),
+                }
+            }
+        };
+        self.terms[i].back = back;
+        self.term = Some(i);
+        self.mode = Mode::Terminal;
     }
 
     /// `Ctrl+E` on the dashboard: edits the file highlighted in the changes list.

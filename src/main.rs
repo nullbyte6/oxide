@@ -134,7 +134,7 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
         {
             app.on_key(key);
         }
-        // An editor or shell needs the whole terminal: leave the dashboard, run it, come back.
+        // yazi needs the whole terminal: leave the dashboard, run it, come back.
         if let Some(launch) = app.launch.take() {
             ratatui::restore();
             let result = launch.run();
