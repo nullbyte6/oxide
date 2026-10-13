@@ -412,6 +412,16 @@ fn yq(s: &str) -> String {
     if plain { s.to_string() } else { format!("'{}'", s.replace('\'', "''")) }
 }
 
+/// An action at the version of pin `key` (see `scaffold::PINS`): `actions/checkout@v4`.
+fn action(name: &str, key: &str) -> String {
+    format!("{name}@{}", crate::scaffold::pin_value(key))
+}
+
+/// The value of pin `key` as a quoted YAML string, so `3.10` stays text.
+fn quoted(key: &str) -> String {
+    format!("'{}'", crate::scaffold::pin_value(key))
+}
+
 /// A step that uses an action, with its `with:` settings.
 fn uses(action: &str, with: &[(&str, &str)]) -> String {
     let mut s = format!("- uses: {action}");
@@ -444,9 +454,9 @@ fn recipe(spec: &Spec, packaging: bool) -> (Vec<String>, Vec<String>, Vec<String
     let cmd = |name: &str, c: &str| run(name, c);
     match spec.tc() {
         Tc::Rust => {
-            setup.push(uses("dtolnay/rust-toolchain@stable", &[]));
+            setup.push(uses(&action("dtolnay/rust-toolchain", "gha_rust_toolchain"), &[]));
             if cache {
-                setup.push(uses("Swatinem/rust-cache@v2", &[]));
+                setup.push(uses(&action("Swatinem/rust-cache", "gha_rust_cache"), &[]));
             }
             cmds.push(cmd("Build", "cargo build --release"));
             cmds.push(cmd("Test", "cargo test"));
@@ -456,13 +466,14 @@ fn recipe(spec: &Spec, packaging: bool) -> (Vec<String>, Vec<String>, Vec<String
         Tc::Node => {
             let pm = f.node_pm.as_str();
             if pm == "pnpm" {
-                setup.push(uses("pnpm/action-setup@v4", &[]));
+                setup.push(uses(&action("pnpm/action-setup", "gha_pnpm"), &[]));
             }
-            let mut with = vec![("node-version", "22")];
+            let node = quoted("ci_node");
+            let mut with = vec![("node-version", node.as_str())];
             if cache {
                 with.push(("cache", pm));
             }
-            setup.push(uses("actions/setup-node@v4", &with));
+            setup.push(uses(&action("actions/setup-node", "gha_node"), &with));
             let install = match pm {
                 "pnpm" => "pnpm install --frozen-lockfile",
                 "yarn" => "yarn install --frozen-lockfile",
@@ -478,11 +489,12 @@ fn recipe(spec: &Spec, packaging: bool) -> (Vec<String>, Vec<String>, Vec<String
             files.extend(["dist".to_string(), "build".to_string()]);
         }
         Tc::Python => {
-            let mut with = vec![("python-version", "'3.12'")];
+            let python = quoted("ci_python");
+            let mut with = vec![("python-version", python.as_str())];
             if cache {
                 with.push(("cache", "pip"));
             }
-            setup.push(uses("actions/setup-python@v5", &with));
+            setup.push(uses(&action("actions/setup-python", "gha_python"), &with));
             cmds.push(cmd("Install", "python -m pip install --upgrade pip pytest"));
             cmds.push(cmd("Install the project", if f.requirements { "python -m pip install -r requirements.txt" } else { "python -m pip install -e ." }));
             cmds.push(cmd("Test", "python -m pytest"));
@@ -496,7 +508,7 @@ fn recipe(spec: &Spec, packaging: bool) -> (Vec<String>, Vec<String>, Vec<String
             if !cache {
                 with.push(("cache", "false"));
             }
-            setup.push(uses("actions/setup-go@v5", &with));
+            setup.push(uses(&action("actions/setup-go", "gha_go"), &with));
             cmds.push(cmd("Build", if packaging { "mkdir -p dist && go build -o dist/ ./..." } else { "go build ./..." }));
             cmds.push(cmd("Test", "go test ./..."));
             if packaging {
@@ -511,7 +523,7 @@ fn recipe(spec: &Spec, packaging: bool) -> (Vec<String>, Vec<String>, Vec<String
             if cache {
                 with.push(("cache", tool));
             }
-            setup.push(uses("actions/setup-java@v4", &with));
+            setup.push(uses(&action("actions/setup-java", "gha_java"), &with));
             if spec.tc() == Tc::Maven {
                 cmds.push(cmd("Build and test", "mvn -B -ntp verify"));
                 files.push("target/*.jar".to_string());
@@ -519,7 +531,7 @@ fn recipe(spec: &Spec, packaging: bool) -> (Vec<String>, Vec<String>, Vec<String
                 if f.gradlew {
                     cmds.push(cmd("Build and test", "bash ./gradlew build"));
                 } else {
-                    setup.push(uses("gradle/actions/setup-gradle@v4", &[("gradle-version", "current")]));
+                    setup.push(uses(&action("gradle/actions/setup-gradle", "gha_gradle"), &[("gradle-version", crate::scaffold::pin_value("ci_gradle").as_str())]));
                     cmds.push(cmd("Build and test", "gradle build"));
                 }
                 files.push("build/libs/*.jar".to_string());
@@ -528,23 +540,24 @@ fn recipe(spec: &Spec, packaging: bool) -> (Vec<String>, Vec<String>, Vec<String
         Tc::DotNet => {
             let dotnet = crate::scaffold::pin_value("dotnet");
             let version = format!("'{}.x'", dotnet.trim_start_matches("net"));
-            setup.push(uses("actions/setup-dotnet@v4", &[("dotnet-version", version.as_str())]));
+            setup.push(uses(&action("actions/setup-dotnet", "gha_dotnet"), &[("dotnet-version", version.as_str())]));
             cmds.push(cmd("Build", "dotnet build -c Release"));
             cmds.push(cmd("Test", "dotnet test -c Release --no-build"));
             files.push("**/bin/Release/**".to_string());
         }
         Tc::Ruby => {
-            let with: Vec<(&str, &str)> = if cache { vec![("ruby-version", "'3.3'"), ("bundler-cache", "true")] } else { vec![("ruby-version", "'3.3'")] };
-            setup.push(uses("ruby/setup-ruby@v1", &with));
+            let ruby = quoted("ci_ruby");
+            let with: Vec<(&str, &str)> = if cache { vec![("ruby-version", ruby.as_str()), ("bundler-cache", "true")] } else { vec![("ruby-version", ruby.as_str())] };
+            setup.push(uses(&action("ruby/setup-ruby", "gha_ruby"), &with));
             if !cache {
                 cmds.push(cmd("Install", "bundle install"));
             }
             cmds.push(cmd("Test", "bundle exec rake"));
         }
         Tc::Php => {
-            setup.push(uses("shivammathur/setup-php@v2", &[("php-version", "'8.3'"), ("tools", "composer")]));
+            setup.push(uses(&action("shivammathur/setup-php", "gha_php"), &[("php-version", quoted("ci_php").as_str()), ("tools", "composer")]));
             if cache {
-                setup.push(uses("actions/cache@v4", &[("path", "vendor"), ("key", "composer-${{ hashFiles('**/composer.lock') }}")]));
+                setup.push(uses(&action("actions/cache", "gha_cache"), &[("path", "vendor"), ("key", "composer-${{ hashFiles('**/composer.lock') }}")]));
             }
             cmds.push(cmd("Install", "composer install --no-progress --prefer-dist"));
             cmds.push(cmd("Validate", "composer validate --strict"));
@@ -553,15 +566,15 @@ fn recipe(spec: &Spec, packaging: bool) -> (Vec<String>, Vec<String>, Vec<String
             }
         }
         Tc::Elixir => {
-            setup.push(uses("erlef/setup-beam@v1", &[("elixir-version", "'1.17'"), ("otp-version", "'27'")]));
+            setup.push(uses(&action("erlef/setup-beam", "gha_beam"), &[("elixir-version", quoted("ci_elixir").as_str()), ("otp-version", quoted("ci_otp").as_str())]));
             if cache {
-                setup.push(uses("actions/cache@v4", &[("path", "|\n      deps\n      _build"), ("key", "mix-${{ hashFiles('mix.lock') }}")]));
+                setup.push(uses(&action("actions/cache", "gha_cache"), &[("path", "|\n      deps\n      _build"), ("key", "mix-${{ hashFiles('mix.lock') }}")]));
             }
             cmds.push(cmd("Install", "mix deps.get"));
             cmds.push(cmd("Test", "mix test"));
         }
         Tc::Zig => {
-            setup.push(uses("mlugg/setup-zig@v1", &[]));
+            setup.push(uses(&action("mlugg/setup-zig", "gha_zig"), &[]));
             cmds.push(cmd("Build", "zig build"));
             cmds.push(cmd("Test", "zig build test"));
             files.push("zig-out/bin/*".to_string());
@@ -580,13 +593,13 @@ fn recipe(spec: &Spec, packaging: bool) -> (Vec<String>, Vec<String>, Vec<String
             files.push(repo_name.to_string());
         }
         Tc::Swift => {
-            setup.push(uses("swift-actions/setup-swift@v2", &[]));
+            setup.push(uses(&action("swift-actions/setup-swift", "gha_swift"), &[]));
             cmds.push(cmd("Build", "swift build -c release"));
             cmds.push(cmd("Test", "swift test"));
             files.push(format!(".build/release/{repo_name}"));
         }
         Tc::Dart => {
-            setup.push(uses("dart-lang/setup-dart@v1", &[]));
+            setup.push(uses(&action("dart-lang/setup-dart", "gha_dart"), &[]));
             cmds.push(cmd("Install", "dart pub get"));
             cmds.push(cmd("Analyze", "dart analyze"));
         }
@@ -658,7 +671,7 @@ pub fn compile(spec: &Spec) -> String {
         y.push_str("    defaults:\n      run:\n        shell: bash\n");
     }
     y.push_str("    steps:\n");
-    let mut steps = vec![uses("actions/checkout@v4", &[])];
+    let mut steps = vec![uses(&action("actions/checkout", "gha_checkout"), &[])];
     steps.extend(setup);
     if spec.kind == Kind::Manual {
         // The typed command comes in as an input; through an environment variable it is never pasted into the script.
@@ -669,7 +682,7 @@ pub fn compile(spec: &Spec) -> String {
     if packaging && !files.is_empty() {
         let name = if multi { "dist-${{ matrix.os }}".to_string() } else { format!("dist-{}", systems[0]) };
         let list = files.join("\n      ");
-        steps.push(format!("- uses: actions/upload-artifact@v4\n  with:\n    name: {name}\n    path: |\n      {list}\n    if-no-files-found: warn"));
+        steps.push(format!("- uses: {}\n  with:\n    name: {name}\n    path: |\n      {list}\n    if-no-files-found: warn", action("actions/upload-artifact", "gha_upload")));
     }
     y.push_str(&indent_steps(&steps, 6));
 
@@ -677,8 +690,8 @@ pub fn compile(spec: &Spec) -> String {
     if spec.kind == Kind::Release && spec.release {
         y.push_str("\n  release:\n    needs: build\n    if: startsWith(github.ref, 'refs/tags/')\n    runs-on: ubuntu-latest\n    permissions:\n      contents: write\n    steps:\n");
         let release = vec![
-            uses("actions/download-artifact@v4", &[("path", "dist"), ("pattern", "dist-*"), ("merge-multiple", "true")]),
-            uses("softprops/action-gh-release@v2", &[("files", "dist/**"), ("generate_release_notes", "true")]),
+            uses(&action("actions/download-artifact", "gha_download"), &[("path", "dist"), ("pattern", "dist-*"), ("merge-multiple", "true")]),
+            uses(&action("softprops/action-gh-release", "gha_release"), &[("files", "dist/**"), ("generate_release_notes", "true")]),
         ];
         y.push_str(&indent_steps(&release, 6));
     }

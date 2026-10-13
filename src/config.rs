@@ -198,7 +198,10 @@ fn read_versions(conf: &Table) -> (Vec<(String, String)>, Option<String>) {
                 continue;
             }
         };
-        if PINS.iter().any(|(k, _, _)| *k == key) {
+        // A version lands inside templates, some of them in quotes or on a command line.
+        if version.is_empty() || version.chars().any(|c| c.is_whitespace() || "'\"\\{}".contains(c)) {
+            problem = problem.or(Some(format!("versions.{key}: no spaces, quotes, backslashes or braces, and not empty")));
+        } else if PINS.iter().any(|(k, _, _)| *k == key) {
             out.push((key, version));
         } else {
             let known: Vec<&str> = PINS.iter().map(|(k, _, _)| *k).collect();

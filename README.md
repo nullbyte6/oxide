@@ -356,8 +356,9 @@ GitHub runs the version that is pushed.
 
 The generated file asks for read-only `contents` permission (the release job alone gets write), and a manual
 task passes the command to the shell through an environment variable instead of pasting it into the script. The
-action versions (`actions/checkout@v4`, `actions/setup-node@v4` ...) are fixed in `src/workflow.rs`, and the Java and
-.NET versions follow the `versions` of `config.lua`.
+version of every action (`actions/checkout@v4`, `actions/setup-node@v4` ...) and of the toolchains they set up
+(Node 22, Python 3.12 ...) can be changed with `versions` in `config.lua` (`gha_*` and `ci_*` keys, listed there),
+so a stale one is a one-line fix; Java and .NET follow the `java` and `dotnet` entries.
 
 ### Tags and releases
 
@@ -546,11 +547,17 @@ clone_dir = "~/dev"
 pin = { "oxide" }
 ignore = { "~/dev/vendor" }
 
--- versions the new-project templates pin; a string (or a whole number) replaces the default. Unset ones keep it.
+-- versions the new-project templates and the generated workflows pin; a string (or a whole number) replaces the
+-- default, with no spaces, quotes or braces. Unset ones keep it.
 -- java 21, junit 5.11.4, surefire 3.5.2, kotlin 2.1.0, scala 3.3.4, sbt 1.10.7, munit 1.0.3, clojure 1.12.0,
 -- dotnet net8.0, php 8.1, python 3.10, dart 3.0.0, nim 2.0.0, c_std 11, cpp_std 20, cmake 3.16
 -- (java also sets the Kotlin JVM target; php, python, dart and nim are minimum versions)
-versions = { java = "17", kotlin = "2.0.21", dotnet = "net9.0" }
+-- generated workflows: the version of each action, as what follows the @ (gha_checkout v4, gha_cache v4,
+-- gha_upload v4, gha_download v4, gha_release v2, gha_node v4, gha_pnpm v4, gha_python v5, gha_go v5, gha_java v4,
+-- gha_gradle v4, gha_dotnet v4, gha_ruby v1, gha_php v2, gha_beam v1, gha_zig v1, gha_swift v2, gha_dart v1,
+-- gha_rust_cache v2, gha_rust_toolchain stable) and the toolchains they set up (ci_node 22, ci_python 3.12,
+-- ci_ruby 3.3, ci_php 8.3, ci_elixir 1.17, ci_otp 27, ci_gradle current); java and dotnet apply there too
+versions = { java = "17", kotlin = "2.0.21", dotnet = "net9.0", gha_checkout = "v5", ci_node = "24" }
 
 -- languages for the new-project menu (K), added to the built-in ones. A language has a name, optional
 -- .gitignore lines (ignore) and either variants or, for a single setup, run / dirs / files directly.
