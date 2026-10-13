@@ -5,6 +5,7 @@ mod banner;
 mod config;
 mod diff;
 mod git;
+mod ignore;
 mod github;
 mod langs;
 mod license;
