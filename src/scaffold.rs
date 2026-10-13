@@ -51,6 +51,8 @@ pub enum PackageKind {
     Namespace,
     /// The name Python code is imported by: one identifier, which becomes the folder under `src/`.
     Importable,
+    /// A library name in lowercase_snake_case that names the files of `lib/` (Ruby, Dart).
+    Snake,
     /// A PHP namespace, parts separated by backslashes (`Acme\\App`), mapped to `src/` by PSR-4.
     PhpNamespace,
 }
@@ -59,7 +61,7 @@ impl PackageKind {
     /// Name of the menu page and of the field on it.
     pub fn noun(self) -> &'static str {
         match self {
-            PackageKind::Packages | PackageKind::Importable => "package",
+            PackageKind::Packages | PackageKind::Importable | PackageKind::Snake => "package",
             PackageKind::Module => "module",
             PackageKind::Namespace | PackageKind::PhpNamespace => "namespace",
         }
@@ -75,6 +77,7 @@ impl PackageKind {
         match self {
             PackageKind::Packages | PackageKind::Namespace => "letters, digits, _ and dots; no leading digit",
             PackageKind::Importable => "letters, digits and _; no leading digit",
+            PackageKind::Snake => "lowercase letters, digits and _, starting with a letter",
             PackageKind::PhpNamespace => "letters, digits and _ between \\; no leading digit",
             PackageKind::Module => "letters, digits and . _ ~ - between slashes",
         }
@@ -87,6 +90,7 @@ impl PackageKind {
             PackageKind::Module => "Module path of go.mod, e.g. github.com/you/app.",
             PackageKind::Namespace => "Root namespace of the project, e.g. Company.App.",
             PackageKind::Importable => "Name the code is imported by, e.g. my_app; it becomes the folder under src/.",
+            PackageKind::Snake => "Library name in lowercase_snake_case, e.g. my_app; it names the files of lib/.",
             PackageKind::PhpNamespace => "Root namespace with backslashes, e.g. Acme\\App (PSR-4, mapped to src/).",
         }
     }
@@ -304,10 +308,10 @@ const BUILTIN: &[Lang] = &[
         name: "Ruby",
         key: "ruby",
         ignore: "",
-        package: None,
+        package: Some(Package { kind: PackageKind::Snake, suggest: "{pkg}" }),
         variants: &[v("Bundler", "bundle init, lib/", &[
             Run("bundle init"),
-            File("lib/{pkg}.rb", RUBY_MAIN),
+            File("lib/{package}.rb", RUBY_MAIN),
             Dir("spec"),
         ])],
     },
@@ -325,8 +329,13 @@ const BUILTIN: &[Lang] = &[
         name: "Dart",
         key: "dart",
         ignore: "",
-        package: None,
-        variants: &[v("Console", "dart create", &[Run("dart create --force --template console .")])],
+        package: Some(Package { kind: PackageKind::Snake, suggest: "{pkg}" }),
+        variants: &[v("Console", "pubspec.yaml, bin/, lib/, test/", &[
+            File("pubspec.yaml", DART_PUBSPEC),
+            File("bin/{package}.dart", DART_MAIN),
+            File("lib/{package}.dart", DART_LIB),
+            Dir("test"),
+        ])],
     },
     Lang {
         name: "Lua",
@@ -480,7 +489,7 @@ impl Plan {
     pub fn build(root: &Path, lang: &Lang, variant: &Variant, packages: &[String], license: Option<&License>, holder: &str, year: i64) -> Plan {
         let name = project_name(root);
         let (pkg, slug, user) = (ident(&name, '_', "app"), ident(&name, '-', "app"), ident(holder, '_', "app"));
-        let pascal = pascal(&name);
+        let pascal_name = pascal(&name);
         // `{package}` is the first package: the one that holds the main code. Directories that mention a
         // package are made for every package, so the others get their (empty) folders too.
         let fill_for = |s: &str, package: &str| {
@@ -488,8 +497,9 @@ impl Plan {
                 .replace("{pkg}", &pkg)
                 .replace("{slug}", &slug)
                 .replace("{user}", &user)
-                .replace("{Pascal}", &pascal)
+                .replace("{Pascal}", &pascal_name)
                 .replace("{package_path}", &package.replace(['.', '\\'], "/"))
+                .replace("{PackagePascal}", &pascal(package))
                 .replace("{package_json}", &package.replace('\\', "\\\\"))
                 .replace("{package}", package)
         };
@@ -641,6 +651,7 @@ pub fn parse_packages(text: &str, kind: PackageKind) -> Result<Vec<String>, Stri
         let ok = match kind {
             PackageKind::Packages | PackageKind::Namespace => joined(name, Some('.')),
             PackageKind::Importable => joined(name, None),
+            PackageKind::Snake => name.starts_with(|c: char| c.is_ascii_lowercase()) && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
             PackageKind::PhpNamespace => joined(name, Some('\\')),
             // A module path is a URL-like path: no spaces, no empty parts.
             PackageKind::Module => name.split('/').all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric() || "._~-".contains(c))),
@@ -1007,7 +1018,13 @@ const PHP_COMPOSER: &str = r##"{
 
 const PHP_CLASS: &str = "<?php\n\ndeclare(strict_types=1);\n\nnamespace {package};\n\nfinal class Greeter\n{\n    public function greet(): string\n    {\n        return 'Hello, world!';\n    }\n}\n";
 
-const RUBY_MAIN: &str = "# frozen_string_literal: true\n\nputs 'Hello, world!'\n";
+const RUBY_MAIN: &str = "# frozen_string_literal: true\n\nmodule {PackagePascal}\n  def self.greet\n    'Hello, world!'\n  end\nend\n";
+
+const DART_PUBSPEC: &str = "name: {package}\ndescription: {slug}\nversion: 0.1.0\n\nenvironment:\n  sdk: '>=3.0.0 <5.0.0'\n";
+
+const DART_MAIN: &str = "import 'package:{package}/{package}.dart';\n\nvoid main() {\n  print(greet());\n}\n";
+
+const DART_LIB: &str = "String greet() => 'Hello, world!';\n";
 
 const LUA_MAIN: &str = "print(\"Hello, world!\")\n";
 
