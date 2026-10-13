@@ -47,7 +47,7 @@ pub enum Msg {
     /// The repository's folder was deleted from disk; drop it from the list.
     Removed(PathBuf),
     /// Repositories found on GitHub (or the error) requested with the given id.
-    Repos { id: u64, result: Result<Vec<github::RepoItem>, String> },
+    Repos { id: u64, result: Result<github::Page, String> },
     /// Issues or pull requests (or the error) requested with the given id.
     GitHub { id: u64, result: Result<Vec<github::Item>, String> },
     /// The text of an issue or pull request (or the error) requested with the given id.

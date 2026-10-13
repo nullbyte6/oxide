@@ -20,7 +20,7 @@ use crate::{
     diff::{self, Diff},
     git::{self, Branch, Commit, DiffKind, Op, ReflogEntry, Remote, TreeItem, TreeKind},
     langs::Breakdown,
-    github::{self, Ci, Item, Kind, RepoItem, State},
+    github::{self, Ci, Hits, Item, Kind, Scope, State},
     logger::{self, Level, Logger},
     marks::{Mark, Marks},
     palette,
@@ -293,18 +293,32 @@ pub struct GhView {
 
 /// GitHub repositories found by a search, or your own, to clone.
 pub struct FinderView {
-    /// The search terms; empty for your own repositories.
+    /// What was typed (shown in the title); empty for your own repositories.
     pub query: String,
+    pub scope: Scope,
+    /// The query without its `user:` / `repo:` / `file:` prefix.
+    pub terms: String,
+    /// Current page, from 1.
+    pub page: usize,
+    /// True when a next page exists.
+    pub more: bool,
+    /// Matches in all, when GitHub reports them.
+    pub total: Option<u64>,
     /// None while loading.
-    pub items: Option<Vec<RepoItem>>,
+    pub hits: Option<Hits>,
     pub error: Option<String>,
     pub list: ListState,
     id: u64,
 }
 
 impl FinderView {
-    fn selected(&self) -> Option<&RepoItem> {
-        self.items.as_ref()?.get(self.list.selected()?)
+    fn new(query: String, scope: Scope, terms: String) -> FinderView {
+        FinderView { query, scope, terms, page: 1, more: false, total: None, hits: None, error: None, list: ListState::default(), id: 0 }
+    }
+
+    /// The repository of the highlighted row (None on a user).
+    fn selected_slug(&self) -> Option<String> {
+        self.hits.as_ref()?.slug(self.list.selected()?).map(String::from)
     }
 }
 
@@ -833,9 +847,9 @@ impl App {
                 Msg::Repos { id, result } => {
                     if let Some(v) = self.finder.as_mut().filter(|v| v.id == id) {
                         match result {
-                            Ok(items) => {
-                                v.list.select(if items.is_empty() { None } else { Some(0) });
-                                v.items = Some(items);
+                            Ok(page) => {
+                                v.list.select(if page.hits.len() == 0 { None } else { Some(0) });
+                                (v.more, v.total, v.hits) = (page.more, page.total, Some(page.hits));
                             }
                             Err(e) => v.error = Some(e),
                         }
@@ -1836,10 +1850,18 @@ impl App {
         self.diff_id += 1;
         let Some(v) = self.finder.as_mut() else { return };
         v.id = self.diff_id;
-        v.items = None;
+        v.hits = None;
         v.error = None;
-        let (id, query) = (v.id, v.query.clone());
-        worker::spawn_msg(self.tx.clone(), move || Msg::Repos { id, result: github::find(&query) });
+        let (id, scope, terms, page) = (v.id, v.scope, v.terms.clone(), v.page);
+        worker::spawn_msg(self.tx.clone(), move || Msg::Repos { id, result: github::find(scope, &terms, page) });
+    }
+
+    /// Shows another page of the current search.
+    fn finder_page(&mut self, page: usize) {
+        if let Some(v) = self.finder.as_mut() {
+            v.page = page;
+        }
+        self.load_finder();
     }
 
     fn on_finder_key(&mut self, key: KeyEvent) {
@@ -1847,7 +1869,7 @@ impl App {
             self.mode = Mode::Normal;
             return;
         };
-        let len = v.items.as_ref().map_or(0, Vec::len);
+        let len = v.hits.as_ref().map_or(0, Hits::len);
         let delta = match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 self.finder = None;
@@ -1855,9 +1877,23 @@ impl App {
                 return;
             }
             KeyCode::Char('/' | 'S') => {
-                let query = v.query.clone();
+                let query = if v.scope == Scope::Owner { String::new() } else { v.query.clone() };
                 self.open_input(InputKind::GhSearch);
                 self.input = query;
+                return;
+            }
+            KeyCode::Char('n' | ']') | KeyCode::Right => {
+                if v.more {
+                    let next = v.page + 1;
+                    self.finder_page(next);
+                }
+                return;
+            }
+            KeyCode::Char('p' | '[') | KeyCode::Left => {
+                if v.page > 1 {
+                    let prev = v.page - 1;
+                    self.finder_page(prev);
+                }
                 return;
             }
             KeyCode::Char('r') => {
@@ -1865,14 +1901,39 @@ impl App {
                 return;
             }
             KeyCode::Char('o') => {
-                let args = v.selected().map(|i| vec!["browse".to_string(), "-R".into(), i.slug.clone()]);
-                if let Some(args) = args {
-                    self.spawn_detached("gh", &args, "opened in the browser");
+                let at = v.list.selected().unwrap_or(0);
+                match v.hits.as_ref() {
+                    Some(Hits::Users(u)) => {
+                        if let Some(u) = u.get(at) {
+                            let url = format!("https://github.com/{}", u.login);
+                            self.spawn_detached("xdg-open", &[url], "opened in the browser");
+                        }
+                    }
+                    Some(Hits::Files(f)) => {
+                        if let Some(f) = f.get(at) {
+                            let args = ["browse".to_string(), f.path.clone(), "-R".into(), f.slug.clone()];
+                            self.spawn_detached("gh", &args, "opened in the browser");
+                        }
+                    }
+                    Some(Hits::Repos(_)) => {
+                        if let Some(slug) = v.selected_slug() {
+                            self.spawn_detached("gh", &["browse".to_string(), "-R".into(), slug], "opened in the browser");
+                        }
+                    }
+                    None => {}
                 }
                 return;
             }
             KeyCode::Enter => {
-                if let Some(slug) = v.selected().map(|i| i.slug.clone()) {
+                // A user opens the list of their repositories; repositories and files lead to the repository.
+                let login = match v.hits.as_ref() {
+                    Some(Hits::Users(u)) => v.list.selected().and_then(|i| u.get(i)).map(|u| u.login.clone()),
+                    _ => None,
+                };
+                if let Some(login) = login {
+                    *v = FinderView::new(format!("repositories of {login}"), Scope::Owner, login);
+                    self.load_finder();
+                } else if let Some(slug) = v.selected_slug() {
                     self.choose_repo(slug);
                 }
                 return;
@@ -2201,7 +2262,12 @@ impl App {
         match kind {
             InputKind::Init => self.init_repo(&text),
             InputKind::GhSearch => {
-                self.finder = Some(FinderView { query: text, items: None, error: None, list: ListState::default(), id: 0 });
+                let (scope, terms) = github::parse(&text);
+                if scope != Scope::Repos && terms.is_empty() {
+                    self.log(Level::Warn, "nothing to look for: type a name after user:, repo: or file:");
+                    return;
+                }
+                self.finder = Some(FinderView::new(text, scope, terms));
                 self.mode = Mode::Finder;
                 self.load_finder();
             }

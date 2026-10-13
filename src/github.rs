@@ -231,20 +231,103 @@ pub struct RepoItem {
     pub fork: bool,
 }
 
-/// Repositories matching `query` on GitHub, or your own repositories when the query is empty.
-pub fn find(query: &str) -> Result<Vec<RepoItem>, String> {
-    // Both listings are reduced to the same seven columns.
-    let out = if query.trim().is_empty() {
-        let jq = r#".[]|[.nameWithOwner,(.description//""),.stargazerCount,(.primaryLanguage.name//""),.pushedAt,.isPrivate,.isFork]|@tsv"#;
-        gh(None, &["repo", "list", "--limit", "100", "--json", "nameWithOwner,description,stargazerCount,primaryLanguage,pushedAt,isPrivate,isFork", "--jq", jq])?
-    } else {
-        let jq = r#".[]|[.fullName,(.description//""),.stargazersCount,(.language//""),.pushedAt,.isPrivate,.isFork]|@tsv"#;
-        let mut args = vec!["search", "repos", "--limit", "50", "--json", "fullName,description,stargazersCount,language,pushedAt,isPrivate,isFork", "--jq", jq, "--"];
-        args.extend(query.split_whitespace());
-        gh(None, &args)?
-    };
-    Ok(out
-        .lines()
+/// Results per page of a GitHub search, so a long list never makes the popup slow.
+pub const PAGE: usize = 20;
+
+/// GitHub only returns the first 1000 matches of a search.
+const MAX_HITS: u64 = 1000;
+
+/// What a search looks for.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Scope {
+    /// Repositories, matching names, descriptions and topics (empty terms list your own).
+    Repos,
+    /// `repo:` – repositories whose name matches.
+    Names,
+    /// `user:` – users and organizations.
+    Users,
+    /// `file:` – files with that name in any repository.
+    Files,
+    /// The repositories of one account, reached with Enter on a user.
+    Owner,
+}
+
+impl Scope {
+    pub fn label(self) -> &'static str {
+        match self {
+            Scope::Repos => "repositories",
+            Scope::Names => "repository names",
+            Scope::Users => "users",
+            Scope::Files => "files",
+            Scope::Owner => "repositories of",
+        }
+    }
+}
+
+/// Splits a search into its scope and terms: a leading `user:`, `repo:` or `file:` picks the scope,
+/// anything else is a plain repository search.
+pub fn parse(query: &str) -> (Scope, String) {
+    let q = query.trim();
+    for (prefix, scope) in [("user:", Scope::Users), ("repo:", Scope::Names), ("file:", Scope::Files)] {
+        if q.get(..prefix.len()).is_some_and(|p| p.eq_ignore_ascii_case(prefix)) {
+            return (scope, q[prefix.len()..].trim().to_string());
+        }
+    }
+    (Scope::Repos, q.to_string())
+}
+
+/// A user or organization found by a search.
+pub struct UserItem {
+    pub login: String,
+    /// `User` or `Organization`.
+    pub kind: String,
+}
+
+/// A file found by a code search.
+pub struct FileItem {
+    /// The repository, `owner/repo`.
+    pub slug: String,
+    pub path: String,
+}
+
+/// The rows of one page.
+pub enum Hits {
+    Repos(Vec<RepoItem>),
+    Users(Vec<UserItem>),
+    Files(Vec<FileItem>),
+}
+
+impl Hits {
+    pub fn len(&self) -> usize {
+        match self {
+            Hits::Repos(v) => v.len(),
+            Hits::Users(v) => v.len(),
+            Hits::Files(v) => v.len(),
+        }
+    }
+
+    /// The repository (`owner/repo`) of row `i`; None for users.
+    pub fn slug(&self, i: usize) -> Option<&str> {
+        match self {
+            Hits::Repos(v) => v.get(i).map(|r| r.slug.as_str()),
+            Hits::Files(v) => v.get(i).map(|f| f.slug.as_str()),
+            Hits::Users(_) => None,
+        }
+    }
+}
+
+/// One page of results.
+pub struct Page {
+    pub hits: Hits,
+    /// Matches in all, as GitHub reports them; None for your own repositories.
+    pub total: Option<u64>,
+    /// True when a next page exists.
+    pub more: bool,
+}
+
+/// Turns the seven-column rows of a repository listing into items.
+fn repo_rows(out: &str) -> Vec<RepoItem> {
+    out.lines()
         .filter_map(|l| {
             let f: Vec<String> = l.split('\t').map(untsv).collect();
             let [slug, description, stars, language, pushed, private, fork] = &f[..] else { return None };
@@ -258,7 +341,63 @@ pub fn find(query: &str) -> Result<Vec<RepoItem>, String> {
                 fork: fork == "true",
             })
         })
-        .collect())
+        .collect()
+}
+
+/// Page `page` (from 1) of the search for `terms` in `scope`, `PAGE` rows at most. Empty terms in `Scope::Repos`
+/// list your own repositories.
+pub fn find(scope: Scope, terms: &str, page: usize) -> Result<Page, String> {
+    let terms = terms.trim();
+    if scope == Scope::Repos && terms.is_empty() {
+        // `gh repo list` cannot skip rows, so it lists everything up to the page and the earlier pages are dropped.
+        let jq = r#".[]|[.nameWithOwner,(.description//""),.stargazerCount,(.primaryLanguage.name//""),.pushedAt,.isPrivate,.isFork]|@tsv"#;
+        let limit = (PAGE * page).to_string();
+        let out = gh(None, &["repo", "list", "--limit", &limit, "--json", "nameWithOwner,description,stargazerCount,primaryLanguage,pushedAt,isPrivate,isFork", "--jq", jq])?;
+        let all = repo_rows(&out);
+        let more = all.len() == PAGE * page;
+        return Ok(Page { hits: Hits::Repos(all.into_iter().skip(PAGE * (page - 1)).collect()), total: None, more });
+    }
+    // The search API, one total line first and then one tab-separated row per match.
+    let (endpoint, q, jq) = match scope {
+        Scope::Users => ("search/users", terms.to_string(), r#".total_count, (.items[]|[.login,.type]|@tsv)"#),
+        Scope::Files => {
+            // The first word is the file name, any more are words to find inside the files.
+            let (name, rest) = terms.split_once(char::is_whitespace).unwrap_or((terms, ""));
+            ("search/code", format!("{rest} filename:{name}"), r#".total_count, (.items[]|[.repository.full_name,.path]|@tsv)"#)
+        }
+        _ => {
+            let q = match scope {
+                Scope::Names => format!("{terms} in:name"),
+                Scope::Owner => format!("user:{terms}"),
+                _ => terms.to_string(),
+            };
+            ("search/repositories", q, r#".total_count, (.items[]|[.full_name,(.description//""),.stargazers_count,(.language//""),.pushed_at,.private,.fork]|@tsv)"#)
+        }
+    };
+    let (q, per, pg) = (format!("q={q}"), format!("per_page={PAGE}"), format!("page={page}"));
+    let mut args = vec!["api", "-X", "GET", endpoint, "-f", &q, "-f", &per, "-f", &pg, "--jq", jq];
+    if scope == Scope::Owner {
+        args.extend(["-f", "sort=updated"]); // newest work first
+    }
+    let out = gh(None, &args)?;
+    let (head, rows) = out.split_once('\n').unwrap_or((&out, ""));
+    let total: u64 = head.trim().parse().unwrap_or(0);
+    let hits = match scope {
+        Scope::Users => Hits::Users(
+            rows.lines()
+                .filter_map(|l| l.split_once('\t'))
+                .map(|(login, kind)| UserItem { login: untsv(login), kind: untsv(kind) })
+                .collect(),
+        ),
+        Scope::Files => Hits::Files(
+            rows.lines()
+                .filter_map(|l| l.split_once('\t'))
+                .map(|(slug, path)| FileItem { slug: untsv(slug), path: untsv(path) })
+                .collect(),
+        ),
+        _ => Hits::Repos(repo_rows(rows)),
+    };
+    Ok(Page { hits, total: Some(total), more: ((page * PAGE) as u64) < total.min(MAX_HITS) })
 }
 
 /// Clones `slug` into `dest` (using the protocol configured in `gh`); the parent folder is created if needed.

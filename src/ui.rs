@@ -23,7 +23,7 @@ use crate::{
     banner,
     diff::{Row, Sign},
     git::{Branch, DiffKind, FileEntry, TreeKind},
-    github::{self, Ci, Kind},
+    github::{self, Ci, Hits, Kind, Scope},
     langs::Breakdown,
     logger::{self, Level},
     palette,
@@ -616,7 +616,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             InputKind::Search => "search".to_string(),
             InputKind::Branch => format!("new branch from {}", app.selected().map_or("", |r| r.branch.as_str())),
             InputKind::Init => "git init in folder (created if missing)".to_string(),
-            InputKind::GhSearch => "search GitHub repositories (empty = yours)".to_string(),
+            InputKind::GhSearch => "search GitHub: words, user:name, repo:name or file:name (empty = your repositories)".to_string(),
             InputKind::CloneTo => "clone into".to_string(),
             InputKind::DeleteRepo => app.selected().map_or_else(String::new, |r| {
                 // `~` instead of the home directory keeps the part that matters on screen.
@@ -684,7 +684,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
     if app.mode == Mode::Finder {
-        let hints = [("↑↓", "move"), ("Enter", "clone"), ("/", "new search"), ("o", "browser"), ("r", "reload"), ("Esc", "close")];
+        let enter = if app.finder.as_ref().is_some_and(|v| v.scope == Scope::Users) { "repos" } else { "clone" };
+        let hints = [("↑↓", "move"), ("←→", "page"), ("Enter", enter), ("/", "new search"), ("o", "browser"), ("r", "reload"), ("Esc", "close")];
         f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
         return;
     }
@@ -1088,54 +1089,84 @@ fn draw_github(f: &mut Frame, app: &mut App) {
     f.render_stateful_widget(List::new(rows).block(block).highlight_style(INVERSE), area, &mut v.list);
 }
 
-/// GitHub repository search results (or your own repositories) as a popup.
+/// GitHub search results (repositories, users or files; or your own repositories) as a popup, one page at a time.
 fn draw_finder(f: &mut Frame, app: &mut App) {
     let cloned: Vec<String> = app.repos.iter().filter_map(|r| r.slug.as_ref().map(|s| s.to_lowercase())).collect();
     let last = app.log.last().map(|l| l.text.clone()).unwrap_or_default();
     let Some(v) = app.finder.as_mut() else { return };
-    let rows = v.items.as_ref().map_or(1, Vec::len) as u16;
+    let rows = v.hits.as_ref().map_or(1, Hits::len) as u16;
     let area = f.area();
     let w = 120.min(area.width);
     let h = (rows + 2).clamp(5, area.height.saturating_sub(2).max(5)).min(area.height);
     let [_, mid, _] = Layout::vertical([Constraint::Fill(1), Constraint::Length(h), Constraint::Fill(1)]).areas(area);
     let [_, popup, _] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(w), Constraint::Fill(1)]).areas(mid);
     f.render_widget(Clear, popup);
-    let what = if v.query.is_empty() { "your repositories".to_string() } else { format!("“{}”", v.query) };
-    let count = v.items.as_ref().map_or(String::new(), |i| format!(" ({})", i.len()));
-    let block = pane(format!(" GitHub · {what}{count} "), true).title_bottom(Line::from(Span::styled(format!(" {last} "), DIM)));
+    let what = if v.scope == Scope::Repos && v.terms.is_empty() {
+        "your repositories".to_string()
+    } else {
+        format!("{} “{}”", v.scope.label(), v.terms)
+    };
+    // GitHub reports how many matches there are (at most 1000 are reachable); your own list only knows whether more follow.
+    let pages = match v.total {
+        Some(t) => format!(" · page {}/{} · {t} found", v.page, t.min(1000).div_ceil(github::PAGE as u64).max(1)),
+        None => format!(" · page {}{}", v.page, if v.more { "+" } else { "" }),
+    };
+    let block = pane(format!(" GitHub · {what}{pages} "), true).title_bottom(Line::from(Span::styled(format!(" {last} "), DIM)));
     let note = |msg: String, f: &mut Frame, block: Block<'static>| {
         f.render_widget(Paragraph::new(msg).style(DIM.add_modifier(Modifier::ITALIC)).block(block), popup);
     };
     if let Some(e) = &v.error {
         return note(format!("gh failed: {}", e.lines().next().unwrap_or("")), f, block);
     }
-    let Some(items) = &v.items else { return note("Searching GitHub…".to_string(), f, block) };
-    if items.is_empty() {
-        return note("No repositories found.".to_string(), f, block);
+    let Some(hits) = &v.hits else { return note("Searching GitHub…".to_string(), f, block) };
+    if hits.len() == 0 {
+        return note(format!("No {} found.", v.scope.label().trim_end_matches(" of")), f, block);
     }
-    let desc_w = (popup.width as usize).saturating_sub(4 + 38 + 7 + 11 + 5 + 8).max(8);
-    let rows: Vec<ListItem> = items
-        .iter()
-        .map(|i| {
-            let mut tags = String::new();
-            if i.private {
-                tags.push_str("private ");
-            }
-            if i.fork {
-                tags.push_str("fork ");
-            }
-            let have = cloned.contains(&i.slug.to_lowercase());
-            let stars = i.stars.map_or_else(String::new, |s| format!("★{s}"));
-            ListItem::new(Line::from(vec![
-                Span::styled(fit(&i.slug, 38), if have { hue(BOLD, GOOD) } else { BOLD }),
-                Span::styled(format!("{stars:>7} "), hue(DIM, WARN)),
-                Span::styled(fit(&i.language, 10), hue(PLAIN, ACCENT)),
-                Span::styled(format!("{:>4} ", i.age), DIM),
-                Span::styled(if have { "cloned " } else { "       " }, hue(PLAIN, GOOD)),
-                Span::styled(fit(&format!("{tags}{}", i.description), desc_w), DIM),
-            ]))
-        })
-        .collect();
+    let rows: Vec<ListItem> = match hits {
+        Hits::Repos(items) => {
+            let desc_w = (popup.width as usize).saturating_sub(4 + 38 + 7 + 11 + 5 + 8).max(8);
+            items
+                .iter()
+                .map(|i| {
+                    let mut tags = String::new();
+                    if i.private {
+                        tags.push_str("private ");
+                    }
+                    if i.fork {
+                        tags.push_str("fork ");
+                    }
+                    let have = cloned.contains(&i.slug.to_lowercase());
+                    let stars = i.stars.map_or_else(String::new, |s| format!("★{s}"));
+                    ListItem::new(Line::from(vec![
+                        Span::styled(fit(&i.slug, 38), if have { hue(BOLD, GOOD) } else { BOLD }),
+                        Span::styled(format!("{stars:>7} "), hue(DIM, WARN)),
+                        Span::styled(fit(&i.language, 10), hue(PLAIN, ACCENT)),
+                        Span::styled(format!("{:>4} ", i.age), DIM),
+                        Span::styled(if have { "cloned " } else { "       " }, hue(PLAIN, GOOD)),
+                        Span::styled(fit(&format!("{tags}{}", i.description), desc_w), DIM),
+                    ]))
+                })
+                .collect()
+        }
+        Hits::Users(items) => items
+            .iter()
+            .map(|u| ListItem::new(Line::from(vec![Span::styled(fit(&u.login, 38), BOLD), Span::styled(u.kind.clone(), DIM)])))
+            .collect(),
+        Hits::Files(items) => {
+            let path_w = (popup.width as usize).saturating_sub(4 + 46 + 8).max(8);
+            items
+                .iter()
+                .map(|i| {
+                    let have = cloned.contains(&i.slug.to_lowercase());
+                    ListItem::new(Line::from(vec![
+                        Span::styled(fit(&i.slug, 38), if have { hue(BOLD, GOOD) } else { BOLD }),
+                        Span::styled(if have { "cloned " } else { "       " }, hue(PLAIN, GOOD)),
+                        Span::styled(fit(&i.path, path_w), PLAIN),
+                    ]))
+                })
+                .collect()
+        }
+    };
     f.render_stateful_widget(List::new(rows).block(block).highlight_style(INVERSE), popup, &mut v.list);
 }
 
