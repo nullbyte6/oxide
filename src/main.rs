@@ -12,6 +12,7 @@ mod marks;
 mod palette;
 mod repo;
 mod syntax;
+mod term;
 mod ui;
 mod watch;
 mod worker;
