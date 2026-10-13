@@ -106,7 +106,9 @@ oxide [OPTIONS] [PATH...]
 | `t` | Open `$SHELL` in the repository; exit it to return |
 | `o` | Open the repository folder in the file manager (`xdg-open`) |
 | `m` | Merge a branch into the current one (empty input merges the upstream) |
-| `r` / `R` | Reload the selected repository / rescan all roots |
+| `r` | Remotes of the selected repository: add, change URL, rename, remove, fetch (see below) |
+| `R` | Rescan all roots |
+| `Ctrl+R`, `F5` | Reload the selected repository by hand (changes are also picked up on their own) |
 | `w` | Refresh the CI status of the repositories in view (see below) |
 | `:` / `Ctrl+P` | Command palette: starts empty, type a few letters of any action (GitHub ones included: `clone`, `issues`, `browser` ...) (fuzzy matched), `↑` `↓` pick, `Enter` runs it, `Esc` clears the query and a second `Esc` closes it |
 | `l` | Hide / show the log panel. While it is hidden, each new log message takes the bottom row for a few seconds so results and errors are not missed |
@@ -215,7 +217,7 @@ refs) and, recursively, the working tree of the *selected* repository, using Lin
 change made by an editor or another terminal reloads the affected repository about 0.4 s after the last
 write; operations started from Oxide reload it anyway. Only one working tree is watched at a time to stay
 below the kernel's watch limit (`fs.inotify.max_user_watches`); `node_modules`, `target`, `venv` and other
-cache folders are skipped. If the watches cannot be set up the log says so and `r` still reloads by hand.
+cache folders are skipped. If the watches cannot be set up the log says so and `Ctrl+R` still reloads by hand.
 
 **Auto-fetch.** With `autofetch = "10m"` in `config.lua` every listed repository that has a remote is fetched
 (`--all --prune`) on that interval, silently: only the first failure of a round is logged. The header shows `⟳ 10m`
@@ -258,6 +260,24 @@ when there is no remote and the folder is the only copy. Any other input, or `Es
 On top of the prompt, Oxide refuses to delete a symlink, a worktree or submodule (whose `.git` is a file),
 anything that is not a standalone repository folder, and any folder that is or contains your home directory.
 Deleting is final: it does not use a trash.
+
+### Remotes
+
+`r` lists the selected repository's remotes with their URLs (a separate push URL is shown after `push →`, and
+`github` marks github.com ones). The dashboard row, the owned/cloned class and the GitHub features follow the
+change at once, since they read the `origin` URL.
+
+| Key | Action |
+| --- | --- |
+| `a` | Add a remote: type `<name> <url>`. A lone URL is named `origin` when the repository has no remote yet |
+| `e` / `u` | Change the highlighted remote's URL (the prompt starts with the current one) |
+| `n` / `F2` | Rename it |
+| `d` | Remove it after `y` (its remote-tracking branches are deleted with it) |
+| `Enter` / `f` | Fetch just that remote |
+| `↑` `↓` / `j` `k`, `g` / `G` | Move |
+| `Esc`, `q`, `r` | Close |
+
+Names and URLs that begin with `-` are refused so git can never read them as options.
 
 ### Worktrees and submodules
 
