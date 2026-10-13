@@ -6,6 +6,7 @@ mod config;
 mod diff;
 mod git;
 mod github;
+mod langs;
 mod logger;
 mod marks;
 mod palette;

@@ -370,6 +370,25 @@ pub fn config_get(repo: &Path, key: &str) -> Option<String> {
     (!v.is_empty()).then_some(v)
 }
 
+/// Every file committed at HEAD as `(path, size in bytes)`, from one `git ls-tree` (no checkout needed).
+/// Symlinks and submodules are left out.
+pub fn tree_blobs(repo: &Path) -> Result<Vec<(String, u64)>, String> {
+    let out = run(repo, &["ls-tree", "-r", "-l", "-z", "HEAD"])?;
+    // Each record is `<mode> <type> <hash> <size>\t<path>`; the size column is padded with spaces.
+    Ok(out
+        .split('\0')
+        .filter_map(|rec| {
+            let (meta, path) = rec.split_once('\t')?;
+            let mut f = meta.split_whitespace();
+            let (mode, kind, _hash, size) = (f.next()?, f.next()?, f.next()?, f.next()?);
+            if kind != "blob" || mode == "120000" {
+                return None;
+            }
+            Some((path.to_string(), size.parse().ok()?))
+        })
+        .collect())
+}
+
 /// A linked worktree or a submodule of a repository.
 pub struct TreeItem {
     pub kind: TreeKind,

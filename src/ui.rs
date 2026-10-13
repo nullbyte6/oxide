@@ -5,7 +5,10 @@
 //! layer on top (`hue`): every colored span keeps the weight and symbol it has without color, so
 //! turning colors off (`C`, `color = false` in config.lua or `NO_COLOR`) leaves the monochrome look unchanged.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    OnceLock,
+    atomic::{AtomicBool, Ordering},
+};
 
 use ratatui::{
     Frame,
@@ -21,6 +24,7 @@ use crate::{
     diff::{Row, Sign},
     git::{Branch, DiffKind, FileEntry, TreeKind},
     github::{Ci, Kind},
+    langs::Breakdown,
     logger::{self, Level},
     palette,
     repo::{Health, Owner, Repo},
@@ -363,6 +367,120 @@ fn commit_line(commit: &str, label: Span<'static>) -> Line<'static> {
     }
 }
 
+/// A language's own colour: true colour where the terminal has it (`COLORTERM`), else the nearest of the
+/// 256-colour palette's 6×6×6 cube.
+fn lang_color(rgb: u32) -> Color {
+    static TRUECOLOR: OnceLock<bool> = OnceLock::new();
+    let truecolor = *TRUECOLOR.get_or_init(|| std::env::var("COLORTERM").is_ok_and(|v| v.contains("truecolor") || v.contains("24bit")));
+    let (r, g, b) = ((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8);
+    if truecolor {
+        return Color::Rgb(r, g, b);
+    }
+    let q = |v: u8| (u16::from(v) * 5 + 127) / 255;
+    Color::Indexed((16 + 36 * q(r) + 6 * q(g) + q(b)) as u8)
+}
+
+/// Fill glyphs that tell languages apart by rank when colors are off.
+const SHADES: [&str; 6] = ["█", "▓", "▒", "░", "▚", "▞"];
+
+/// The glyph and style a language's bar and swatch are drawn with: its colour, or a shade by rank without colors.
+fn lang_mark(rank: usize, rgb: u32) -> (&'static str, Style) {
+    if COLOR.load(Ordering::Relaxed) { ("█", PLAIN.fg(lang_color(rgb))) } else { (SHADES[rank % SHADES.len()], PLAIN) }
+}
+
+/// `82%`, or `<1%` for the tiny shares.
+fn percent(p: f64) -> String {
+    if p < 1.0 { "<1%".to_string() } else { format!("{p:.0}%") }
+}
+
+/// `12.3 kB` style size.
+fn human(bytes: u64) -> String {
+    match bytes {
+        b if b < 1024 => format!("{b} B"),
+        b if b < 1024 * 1024 => format!("{:.1} kB", b as f64 / 1024.0),
+        b => format!("{:.1} MB", b as f64 / 1048576.0),
+    }
+}
+
+/// One line for the details pane: a stacked bar of `cells` cells in the languages' colours and the top three names.
+fn langs_line(entry: Option<&(String, Result<Breakdown, String>)>, cells: usize) -> Vec<Span<'static>> {
+    let note = |msg: &str| vec![Span::styled(msg.to_string(), DIM.add_modifier(Modifier::ITALIC))];
+    let bd = match entry {
+        None => return note("counting…"),
+        Some((_, Err(_))) => return note("no commits yet"),
+        Some((_, Ok(bd))) => bd,
+    };
+    if bd.langs.is_empty() {
+        return note("none recognised");
+    }
+    // Each language gets the cells between its cumulative boundaries, so the bar always adds up to `cells`.
+    let mut spans = Vec::new();
+    let (mut cum, mut drawn) = (0u64, 0usize);
+    for (rank, st) in bd.langs.iter().enumerate() {
+        cum += st.bytes;
+        let end = (cum as f64 * cells as f64 / bd.total as f64).round() as usize;
+        if end > drawn {
+            let (glyph, style) = lang_mark(rank, st.color);
+            spans.push(Span::styled(glyph.repeat(end - drawn), style));
+            drawn = end;
+        }
+    }
+    for (rank, st) in bd.langs.iter().enumerate().take(3) {
+        let (glyph, style) = lang_mark(rank, st.color);
+        spans.push(Span::styled(format!(" {glyph}"), style));
+        spans.push(Span::styled(format!("{} {}", st.name, percent(bd.percent(st))), PLAIN));
+    }
+    if bd.langs.len() > 3 {
+        spans.push(Span::styled(format!(" +{}", bd.langs.len() - 3), DIM));
+    }
+    spans
+}
+
+/// The Languages pane when it has focus: one row per language with its swatch, a bar, share, size and file count.
+fn draw_langs(f: &mut Frame, app: &mut App, area: Rect, path: &std::path::Path) {
+    let entry = app.langs.get(path);
+    let count = match entry {
+        Some((_, Ok(bd))) => format!(" ({})", bd.langs.len()),
+        _ => String::new(),
+    };
+    let block = pane(format!(" Languages{count} "), true);
+    let note = |msg: &str, f: &mut Frame, block: Block<'static>| {
+        f.render_widget(Paragraph::new(msg.to_string()).style(DIM.add_modifier(Modifier::ITALIC)).block(block), area);
+    };
+    let bd = match entry {
+        None => return note("Counting…", f, block),
+        Some((_, Err(e))) => return note(&format!("No languages: {}", e.lines().next().unwrap_or("")), f, block),
+        Some((_, Ok(bd))) => bd,
+    };
+    if bd.langs.is_empty() {
+        return note("No programming or markup languages recognised.", f, block);
+    }
+    // Fixed columns: swatch, name, share, size, files; the bar takes what is left (up to 24 cells).
+    let fixed = 2 + 16 + 1 + 5 + 10 + 9;
+    let bar_w = (area.width as usize).saturating_sub(4 + fixed).min(24);
+    let rows: Vec<ListItem> = bd
+        .langs
+        .iter()
+        .enumerate()
+        .map(|(rank, st)| {
+            let p = bd.percent(st);
+            let (glyph, style) = lang_mark(rank, st.color);
+            let mut spans = vec![Span::styled(format!("{glyph} "), style), Span::styled(fit(st.name, 16), BOLD), Span::raw(" ")];
+            if bar_w >= 4 {
+                let filled = ((p * bar_w as f64 / 100.0).round() as usize).clamp(1, bar_w);
+                spans.push(Span::styled(glyph.repeat(filled), style));
+                spans.push(Span::styled("░".repeat(bar_w - filled), DIM));
+            }
+            spans.push(Span::styled(format!("{:>5}", percent(p)), PLAIN));
+            spans.push(Span::styled(format!("{:>10}", human(st.bytes)), DIM));
+            spans.push(Span::styled(format!("{:>6} f", st.files), DIM));
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+    let list = List::new(rows).block(block).highlight_style(INVERSE);
+    f.render_stateful_widget(list, area, &mut app.lang_state);
+}
+
 fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Files;
     let Some(r) = app.selected().cloned() else {
@@ -370,7 +488,15 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     };
 
-    let [info_area, files_area] = Layout::vertical([Constraint::Length(9), Constraint::Min(3)]).spacing(GAP_Y).areas(area);
+    // With the Languages pane focused it grows to fill the panel and the Changes list shrinks to a few rows.
+    let langs_focus = app.focus == Focus::Langs;
+    let (info_area, langs_area, files_area) = if langs_focus {
+        let [i, l, f] = Layout::vertical([Constraint::Length(10), Constraint::Min(4), Constraint::Length(4)]).spacing(GAP_Y).areas(area);
+        (i, Some(l), f)
+    } else {
+        let [i, f] = Layout::vertical([Constraint::Length(10), Constraint::Min(3)]).spacing(GAP_Y).areas(area);
+        (i, None, f)
+    };
 
     let label = |s: &'static str| Span::styled(format!("{s:<9}"), DIM);
     let ci = ci_of(app, &r);
@@ -415,9 +541,18 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
     ];
     if let Some(e) = &r.error {
         lines.push(Line::from(Span::styled(format!("error: {}", e.lines().next().unwrap_or("")), hue(BOLD, BAD))));
+    } else {
+        // The bar leaves room for the label and the three names after it.
+        let cells = (info_area.width as usize).saturating_sub(4 + 9 + 44).clamp(8, 24);
+        let mut spans = vec![label("langs")];
+        spans.extend(langs_line(app.langs.get(&r.path), cells));
+        lines.push(Line::from(spans));
     }
     f.render_widget(Paragraph::new(lines).block(pane(format!(" {} ", r.name), false)), info_area);
 
+    if let Some(langs_area) = langs_area {
+        draw_langs(f, app, langs_area, &r.path);
+    }
     let block = pane(format!(" Changes ({}) ", r.files.len()), focused);
     if r.files.is_empty() {
         f.render_widget(Paragraph::new("Working tree clean ✓").style(DIM.add_modifier(Modifier::ITALIC)).block(block), files_area);
@@ -1078,7 +1213,7 @@ fn draw_palette(f: &mut Frame, app: &mut App) {
 fn draw_help(f: &mut Frame) {
     let rows: &[(&str, &str)] = &[
         ("↑ ↓ / j k, g G", "move selection, first / last"),
-        ("Tab, ← →", "switch between repositories and changes"),
+        ("Tab, ← →", "switch between repositories, languages and changes"),
         ("f, 1 2 3 4", "filter: all / owned / cloned / attention"),
         ("s", "sort: name / recent / changes / behind"),
         ("/", "search by name, branch or path (Esc clears)"),

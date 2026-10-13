@@ -36,6 +36,8 @@ pub enum Msg {
     History { id: u64, result: Result<Vec<git::Commit>, String> },
     /// The reflog (or error) requested with the given id.
     Reflog { id: u64, result: Result<Vec<git::ReflogEntry>, String> },
+    /// The language breakdown of a repository at the commit `key` (an error when it has no commits).
+    Langs { path: PathBuf, key: String, result: Result<crate::langs::Breakdown, String> },
     /// Worktrees and submodules (or the error) requested with the given id.
     Trees { id: u64, result: Result<Vec<git::TreeItem>, String> },
     /// The branch list (or error) requested with the given id.
@@ -172,6 +174,14 @@ pub fn spawn_history(repo: PathBuf, id: u64, tx: Sender<Msg>) {
 pub fn spawn_reflog(repo: PathBuf, id: u64, tx: Sender<Msg>) {
     thread::spawn(move || {
         let _ = tx.send(Msg::Reflog { id, result: git::reflog(&repo, 300) });
+    });
+}
+
+/// Counts the languages of one repository in the background.
+pub fn spawn_langs(path: PathBuf, key: String, tx: Sender<Msg>) {
+    thread::spawn(move || {
+        let result = git::tree_blobs(&path).map(crate::langs::analyze);
+        let _ = tx.send(Msg::Langs { path, key, result });
     });
 }
 

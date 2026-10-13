@@ -19,6 +19,7 @@ use crate::{
     config::{self, Config},
     diff::{self, Diff},
     git::{self, Branch, Commit, DiffKind, Op, ReflogEntry, TreeItem, TreeKind},
+    langs::Breakdown,
     github::{self, Ci, Item, Kind, RepoItem, State},
     logger::{self, Level, Logger},
     marks::{Mark, Marks},
@@ -322,6 +323,8 @@ pub struct Confirm {
 #[derive(Clone, Copy, PartialEq)]
 pub enum Focus {
     Repos,
+    /// The languages pane of the details panel.
+    Langs,
     Files,
 }
 
@@ -387,6 +390,12 @@ pub struct App {
     pub visible: Vec<usize>,
     pub repo_state: ListState,
     pub file_state: ListState,
+    /// Selection in the languages pane (it only scrolls).
+    pub lang_state: ListState,
+    /// Language breakdown per repository, with the commit it was computed for.
+    pub langs: HashMap<PathBuf, (String, Result<Breakdown, String>)>,
+    /// Repositories whose languages are being counted.
+    lang_busy: HashSet<PathBuf>,
     pub focus: Focus,
     pub mode: Mode,
     pub filter: Filter,
@@ -523,6 +532,9 @@ impl App {
             visible: Vec::new(),
             repo_state: ListState::default(),
             file_state: ListState::default(),
+            lang_state: ListState::default(),
+            langs: HashMap::new(),
+            lang_busy: HashSet::new(),
             focus: Focus::Repos,
             mode: Mode::Normal,
             filter: Filter::All,
@@ -735,6 +747,10 @@ impl App {
                         }
                     }
                 }
+                Msg::Langs { path, key, result } => {
+                    self.lang_busy.remove(&path);
+                    self.langs.insert(path, (key, result));
+                }
                 Msg::Trees { id, result } => {
                     if let Some(v) = self.trees.as_mut().filter(|v| v.id == id) {
                         match result {
@@ -915,6 +931,17 @@ impl App {
             }
         }
 
+        // Count the selected repository's languages once per commit; the result is cached until HEAD moves.
+        if let Some(r) = self.selected()
+            && let Some(key) = r.last_commit.split_whitespace().next().filter(|_| r.commit_time > 0).map(str::to_string)
+            && self.langs.get(&r.path).is_none_or(|(k, _)| *k != key)
+            && !self.lang_busy.contains(&r.path)
+        {
+            let path = r.path.clone();
+            self.lang_busy.insert(path.clone());
+            worker::spawn_langs(path, key, self.tx.clone());
+        }
+
         let every = self.cfg.autofetch;
         if every > 0 && self.scan.is_none() && self.auto_at.elapsed() >= Duration::from_secs(every) {
             self.auto_at = Instant::now();
@@ -1037,16 +1064,15 @@ impl App {
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Char('?') => self.mode = Mode::Help,
             KeyCode::Esc => {
-                if self.focus == Focus::Files {
+                if self.focus != Focus::Repos {
                     self.focus = Focus::Repos;
                 } else if !self.search.is_empty() {
                     self.search.clear();
                     self.rebuild();
                 }
             }
-            KeyCode::Tab | KeyCode::BackTab => self.toggle_focus(),
-            KeyCode::Right => self.focus = Focus::Files,
-            KeyCode::Left => self.focus = Focus::Repos,
+            KeyCode::Tab | KeyCode::Right => self.move_focus(true),
+            KeyCode::BackTab | KeyCode::Left => self.move_focus(false),
             KeyCode::Char('h') => self.hints = !self.hints,
             KeyCode::Char('l') => self.logs = !self.logs,
             KeyCode::Char(':') => self.open_palette(),
@@ -1114,10 +1140,10 @@ impl App {
             KeyCode::Char('c') => self.open_commit(),
             KeyCode::Char(' ') => self.toggle_stage(),
             KeyCode::Enter => {
-                if self.focus == Focus::Repos {
-                    self.focus = Focus::Files;
-                } else {
-                    self.toggle_stage();
+                match self.focus {
+                    Focus::Repos => self.focus = Focus::Files,
+                    Focus::Files => self.toggle_stage(),
+                    Focus::Langs => {}
                 }
             }
             _ => {}
@@ -2061,8 +2087,12 @@ impl App {
         self.rebuild();
     }
 
-    fn toggle_focus(&mut self) {
-        self.focus = if self.focus == Focus::Repos { Focus::Files } else { Focus::Repos };
+    /// Moves the focus along repositories → languages → changes; `Tab` and `→` go forward and wrap
+    /// (`→` stops at the end), `Shift+Tab` and `←` go back.
+    fn move_focus(&mut self, forward: bool) {
+        const ORDER: [Focus; 3] = [Focus::Repos, Focus::Langs, Focus::Files];
+        let at = ORDER.iter().position(|f| *f == self.focus).unwrap_or(0);
+        self.focus = ORDER[if forward { (at + 1) % ORDER.len() } else { (at + ORDER.len() - 1) % ORDER.len() }];
     }
 
     fn move_sel(&mut self, delta: isize) {
@@ -2072,8 +2102,13 @@ impl App {
                 if next != self.repo_state.selected() {
                     self.repo_state.select(next);
                     self.file_state.select(None); // a different repository: start at its first file
+                    self.lang_state.select(None);
                     self.clamp_files();
                 }
+            }
+            Focus::Langs => {
+                let len = self.selected().and_then(|r| self.langs.get(&r.path)).map_or(0, |(_, b)| b.as_ref().map_or(0, |b| b.langs.len()));
+                self.lang_state.select(step(self.lang_state.selected(), len, delta));
             }
             Focus::Files => {
                 let len = self.selected().map_or(0, |r| r.files.len());
