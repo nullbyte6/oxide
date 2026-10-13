@@ -184,3 +184,503 @@ fn read_input(name: String, props: &[&str]) -> Input {
     }
     input
 }
+
+// ---- writing new workflows ----
+
+/// What a new workflow is for; it sets the defaults of the wizard and the shape of the jobs.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Kind {
+    /// Build and test on pushes and pull requests.
+    Ci,
+    /// Build on a version tag and publish a GitHub release with the files.
+    Release,
+    /// Build and test on a schedule.
+    Scheduled,
+    /// A command that is started by hand from GitHub or from Oxide.
+    Manual,
+}
+
+impl Kind {
+    pub const ALL: [Kind; 4] = [Kind::Ci, Kind::Release, Kind::Scheduled, Kind::Manual];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Kind::Ci => "CI",
+            Kind::Release => "Release",
+            Kind::Scheduled => "Scheduled",
+            Kind::Manual => "Manual task",
+        }
+    }
+
+    pub fn note(self) -> &'static str {
+        match self {
+            Kind::Ci => "build and test on every push and pull request",
+            Kind::Release => "build on a version tag and publish a GitHub release with the files",
+            Kind::Scheduled => "build and test on a schedule, e.g. every Monday",
+            Kind::Manual => "run a command when you start it, from GitHub or from Oxide (N)",
+        }
+    }
+
+    /// The file name suggested for a workflow of this kind.
+    pub fn file(self) -> &'static str {
+        match self {
+            Kind::Ci => "ci.yml",
+            Kind::Release => "release.yml",
+            Kind::Scheduled => "scheduled.yml",
+            Kind::Manual => "manual.yml",
+        }
+    }
+}
+
+/// A language or build tool a workflow can set up and run.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Tc {
+    Rust,
+    Node,
+    Python,
+    Go,
+    Maven,
+    Gradle,
+    DotNet,
+    Ruby,
+    Php,
+    Elixir,
+    Zig,
+    CMake,
+    Make,
+    Swift,
+    Dart,
+    /// No setup: the commands are typed in the wizard.
+    Custom,
+}
+
+/// The toolchains offered, with the files of a repository that suggest each one.
+pub const TOOLCHAINS: &[(Tc, &str, &[&str])] = &[
+    (Tc::Rust, "Rust (cargo)", &["Cargo.toml"]),
+    (Tc::Node, "Node.js (npm, yarn, pnpm)", &["package.json"]),
+    (Tc::Python, "Python (pip, pytest)", &["pyproject.toml", "requirements.txt", "setup.py"]),
+    (Tc::Go, "Go", &["go.mod"]),
+    (Tc::Maven, "Java (Maven)", &["pom.xml"]),
+    (Tc::Gradle, "Java / Kotlin (Gradle)", &["build.gradle", "build.gradle.kts"]),
+    (Tc::DotNet, "C# (.NET)", &["*.csproj", "*.sln"]),
+    (Tc::Ruby, "Ruby (bundler)", &["Gemfile"]),
+    (Tc::Php, "PHP (composer)", &["composer.json"]),
+    (Tc::Elixir, "Elixir (mix)", &["mix.exs"]),
+    (Tc::Zig, "Zig", &["build.zig"]),
+    (Tc::CMake, "C / C++ (CMake)", &["CMakeLists.txt"]),
+    (Tc::Make, "C / C++ (Make)", &["Makefile"]),
+    (Tc::Swift, "Swift", &["Package.swift"]),
+    (Tc::Dart, "Dart", &["pubspec.yaml"]),
+    (Tc::Custom, "Other: type the commands", &[]),
+];
+
+/// What the repository itself says, to choose commands that fit it.
+#[derive(Clone, Debug, Default)]
+pub struct Facts {
+    /// `name` of the Rust package, the binary a release ships.
+    pub cargo_name: Option<String>,
+    /// `gradlew` is committed.
+    pub gradlew: bool,
+    pub requirements: bool,
+    /// `npm`, `yarn` or `pnpm`, by lock file.
+    pub node_pm: String,
+    pub node_build: bool,
+    pub node_test: bool,
+    pub phpunit: bool,
+    pub make_test: bool,
+}
+
+/// The index in `TOOLCHAINS` of the toolchain a repository looks like it uses, and what it says about itself.
+pub fn detect(repo: &Path) -> (Option<usize>, Facts) {
+    let has = |name: &str| repo.join(name).exists();
+    let any = |pattern: &str| match pattern.strip_prefix('*') {
+        Some(ext) => std::fs::read_dir(repo).into_iter().flatten().flatten().any(|e| e.file_name().to_string_lossy().ends_with(ext)),
+        None => has(pattern),
+    };
+    let found = TOOLCHAINS.iter().position(|(_, _, files)| files.iter().any(|f| any(f)));
+    let text = |name: &str| std::fs::read_to_string(repo.join(name)).unwrap_or_default();
+    let cargo_name = text("Cargo.toml").lines().skip_while(|l| l.trim() != "[package]").skip(1).take_while(|l| !l.trim_start().starts_with('[')).find_map(|l| {
+        let (k, v) = l.split_once('=')?;
+        (k.trim() == "name").then(|| v.trim().trim_matches('"').to_string())
+    });
+    let package = text("package.json");
+    let facts = Facts {
+        cargo_name,
+        gradlew: has("gradlew"),
+        requirements: has("requirements.txt"),
+        node_pm: if has("pnpm-lock.yaml") { "pnpm" } else if has("yarn.lock") { "yarn" } else { "npm" }.to_string(),
+        node_build: package.contains("\"build\":"),
+        node_test: package.contains("\"test\":"),
+        phpunit: has("phpunit.xml") || has("phpunit.xml.dist"),
+        make_test: text("Makefile").lines().any(|l| l.starts_with("test:")),
+    };
+    (found, facts)
+}
+
+/// The choices of the wizard, which `compile` turns into a file.
+#[derive(Clone, Debug)]
+pub struct Spec {
+    pub kind: Kind,
+    /// An index into `TOOLCHAINS`.
+    pub toolchain: usize,
+    pub facts: Facts,
+    pub name: String,
+    pub branches: Vec<String>,
+    pub push: bool,
+    pub pull_request: bool,
+    /// A push of a `v*` tag.
+    pub tags: bool,
+    pub schedule: bool,
+    pub cron: String,
+    pub dispatch: bool,
+    pub linux: bool,
+    pub macos: bool,
+    pub windows: bool,
+    pub cache: bool,
+    /// Keep the built files as run artifacts.
+    pub artifacts: bool,
+    /// Cancel a run that a newer push makes obsolete.
+    pub concurrency: bool,
+    /// Publish a GitHub release (kind `Release`).
+    pub release: bool,
+    /// The command of a manual task, or the commands (separated by `;`) of the custom toolchain.
+    pub command: String,
+}
+
+impl Spec {
+    /// The defaults for a workflow of `kind` on the repository's branch `branch`.
+    pub fn new(kind: Kind, toolchain: usize, facts: Facts, branch: &str) -> Spec {
+        Spec {
+            kind,
+            toolchain,
+            facts,
+            name: kind.name().to_string(),
+            branches: vec![branch.to_string()],
+            push: kind == Kind::Ci,
+            pull_request: kind == Kind::Ci,
+            tags: kind == Kind::Release,
+            schedule: kind == Kind::Scheduled,
+            cron: "0 6 * * 1".to_string(),
+            dispatch: true,
+            linux: true,
+            macos: false,
+            windows: false,
+            cache: true,
+            artifacts: kind == Kind::Release,
+            concurrency: kind == Kind::Ci,
+            release: kind == Kind::Release,
+            command: String::new(),
+        }
+    }
+
+    pub fn tc(&self) -> Tc {
+        TOOLCHAINS[self.toolchain].0
+    }
+
+    /// Why this spec cannot be written, if it cannot.
+    pub fn check(&self) -> Result<(), String> {
+        if self.name.trim().is_empty() {
+            return Err("the workflow needs a name".to_string());
+        }
+        if !(self.push || self.pull_request || self.tags || self.schedule || self.dispatch) {
+            return Err("pick at least one trigger".to_string());
+        }
+        if (self.push || self.pull_request) && self.branches.is_empty() {
+            return Err("name at least one branch for the push and pull request triggers".to_string());
+        }
+        if self.schedule && self.cron.split_whitespace().count() != 5 {
+            return Err("the schedule is a cron expression with 5 fields, e.g. 0 6 * * 1".to_string());
+        }
+        if !(self.linux || self.macos || self.windows) {
+            return Err("pick at least one system to run on".to_string());
+        }
+        if (self.kind == Kind::Manual || self.tc() == Tc::Custom) && self.command.trim().is_empty() {
+            return Err("type the command to run".to_string());
+        }
+        Ok(())
+    }
+}
+
+/// `s` as a YAML scalar: as it is when that is safe, else in single quotes.
+fn yq(s: &str) -> String {
+    let plain = !s.is_empty()
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || " _./-".contains(c))
+        && !s.starts_with([' ', '-', '.'])
+        && !s.ends_with(' ')
+        && !matches!(s.to_lowercase().as_str(), "true" | "false" | "yes" | "no" | "on" | "off" | "null" | "~")
+        && s.parse::<f64>().is_err();
+    if plain { s.to_string() } else { format!("'{}'", s.replace('\'', "''")) }
+}
+
+/// A step that uses an action, with its `with:` settings.
+fn uses(action: &str, with: &[(&str, &str)]) -> String {
+    let mut s = format!("- uses: {action}");
+    if !with.is_empty() {
+        s.push_str("\n  with:");
+        for (k, v) in with {
+            s.push_str(&format!("\n    {k}: {v}"));
+        }
+    }
+    s
+}
+
+/// A step that runs a command.
+fn run(name: &str, command: &str) -> String {
+    format!("- name: {}\n  run: {command}", yq(name))
+}
+
+/// The runner systems of a spec, as `(runs-on names)`.
+fn systems(spec: &Spec) -> Vec<&'static str> {
+    [(spec.linux, "ubuntu-latest"), (spec.macos, "macos-latest"), (spec.windows, "windows-latest")].iter().filter(|(on, _)| *on).map(|(_, n)| *n).collect()
+}
+
+/// The steps that set a toolchain up, the commands that build and test with it and the files it produces.
+/// `packaging` asks for build output to keep or publish.
+fn recipe(spec: &Spec, packaging: bool) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let f = &spec.facts;
+    let cache = spec.cache;
+    let repo_name = "${{ github.event.repository.name }}";
+    let (mut setup, mut cmds, mut files): (Vec<String>, Vec<String>, Vec<String>) = (Vec::new(), Vec::new(), Vec::new());
+    let cmd = |name: &str, c: &str| run(name, c);
+    match spec.tc() {
+        Tc::Rust => {
+            setup.push(uses("dtolnay/rust-toolchain@stable", &[]));
+            if cache {
+                setup.push(uses("Swatinem/rust-cache@v2", &[]));
+            }
+            cmds.push(cmd("Build", "cargo build --release"));
+            cmds.push(cmd("Test", "cargo test"));
+            let bin = f.cargo_name.clone().unwrap_or_else(|| repo_name.to_string());
+            files.extend([format!("target/release/{bin}"), format!("target/release/{bin}.exe")]);
+        }
+        Tc::Node => {
+            let pm = f.node_pm.as_str();
+            if pm == "pnpm" {
+                setup.push(uses("pnpm/action-setup@v4", &[]));
+            }
+            let mut with = vec![("node-version", "22")];
+            if cache {
+                with.push(("cache", pm));
+            }
+            setup.push(uses("actions/setup-node@v4", &with));
+            let install = match pm {
+                "pnpm" => "pnpm install --frozen-lockfile",
+                "yarn" => "yarn install --frozen-lockfile",
+                _ => "npm ci",
+            };
+            cmds.push(cmd("Install", install));
+            if f.node_build {
+                cmds.push(cmd("Build", &format!("{pm} run build")));
+            }
+            if f.node_test {
+                cmds.push(cmd("Test", &format!("{pm} test")));
+            }
+            files.extend(["dist".to_string(), "build".to_string()]);
+        }
+        Tc::Python => {
+            let mut with = vec![("python-version", "'3.12'")];
+            if cache {
+                with.push(("cache", "pip"));
+            }
+            setup.push(uses("actions/setup-python@v5", &with));
+            cmds.push(cmd("Install", "python -m pip install --upgrade pip pytest"));
+            cmds.push(cmd("Install the project", if f.requirements { "python -m pip install -r requirements.txt" } else { "python -m pip install -e ." }));
+            cmds.push(cmd("Test", "python -m pytest"));
+            if packaging {
+                cmds.push(cmd("Build the package", "python -m pip install build && python -m build"));
+                files.push("dist/*".to_string());
+            }
+        }
+        Tc::Go => {
+            let mut with = vec![("go-version-file", "go.mod")];
+            if !cache {
+                with.push(("cache", "false"));
+            }
+            setup.push(uses("actions/setup-go@v5", &with));
+            cmds.push(cmd("Build", if packaging { "mkdir -p dist && go build -o dist/ ./..." } else { "go build ./..." }));
+            cmds.push(cmd("Test", "go test ./..."));
+            if packaging {
+                files.push("dist/*".to_string());
+            }
+        }
+        Tc::Maven | Tc::Gradle => {
+            let java = crate::scaffold::pin_value("java");
+            let java = format!("'{java}'");
+            let mut with = vec![("distribution", "temurin"), ("java-version", java.as_str())];
+            let tool = if spec.tc() == Tc::Maven { "maven" } else { "gradle" };
+            if cache {
+                with.push(("cache", tool));
+            }
+            setup.push(uses("actions/setup-java@v4", &with));
+            if spec.tc() == Tc::Maven {
+                cmds.push(cmd("Build and test", "mvn -B -ntp verify"));
+                files.push("target/*.jar".to_string());
+            } else {
+                if f.gradlew {
+                    cmds.push(cmd("Build and test", "bash ./gradlew build"));
+                } else {
+                    setup.push(uses("gradle/actions/setup-gradle@v4", &[("gradle-version", "current")]));
+                    cmds.push(cmd("Build and test", "gradle build"));
+                }
+                files.push("build/libs/*.jar".to_string());
+            }
+        }
+        Tc::DotNet => {
+            let dotnet = crate::scaffold::pin_value("dotnet");
+            let version = format!("'{}.x'", dotnet.trim_start_matches("net"));
+            setup.push(uses("actions/setup-dotnet@v4", &[("dotnet-version", version.as_str())]));
+            cmds.push(cmd("Build", "dotnet build -c Release"));
+            cmds.push(cmd("Test", "dotnet test -c Release --no-build"));
+            files.push("**/bin/Release/**".to_string());
+        }
+        Tc::Ruby => {
+            let with: Vec<(&str, &str)> = if cache { vec![("ruby-version", "'3.3'"), ("bundler-cache", "true")] } else { vec![("ruby-version", "'3.3'")] };
+            setup.push(uses("ruby/setup-ruby@v1", &with));
+            if !cache {
+                cmds.push(cmd("Install", "bundle install"));
+            }
+            cmds.push(cmd("Test", "bundle exec rake"));
+        }
+        Tc::Php => {
+            setup.push(uses("shivammathur/setup-php@v2", &[("php-version", "'8.3'"), ("tools", "composer")]));
+            if cache {
+                setup.push(uses("actions/cache@v4", &[("path", "vendor"), ("key", "composer-${{ hashFiles('**/composer.lock') }}")]));
+            }
+            cmds.push(cmd("Install", "composer install --no-progress --prefer-dist"));
+            cmds.push(cmd("Validate", "composer validate --strict"));
+            if f.phpunit {
+                cmds.push(cmd("Test", "vendor/bin/phpunit"));
+            }
+        }
+        Tc::Elixir => {
+            setup.push(uses("erlef/setup-beam@v1", &[("elixir-version", "'1.17'"), ("otp-version", "'27'")]));
+            if cache {
+                setup.push(uses("actions/cache@v4", &[("path", "|\n      deps\n      _build"), ("key", "mix-${{ hashFiles('mix.lock') }}")]));
+            }
+            cmds.push(cmd("Install", "mix deps.get"));
+            cmds.push(cmd("Test", "mix test"));
+        }
+        Tc::Zig => {
+            setup.push(uses("mlugg/setup-zig@v1", &[]));
+            cmds.push(cmd("Build", "zig build"));
+            cmds.push(cmd("Test", "zig build test"));
+            files.push("zig-out/bin/*".to_string());
+        }
+        Tc::CMake => {
+            cmds.push(cmd("Configure", "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release"));
+            cmds.push(cmd("Build", "cmake --build build --config Release"));
+            cmds.push(cmd("Test", "ctest --test-dir build -C Release --output-on-failure"));
+            files.extend([format!("build/{repo_name}"), format!("build/Release/{repo_name}.exe")]);
+        }
+        Tc::Make => {
+            cmds.push(cmd("Build", "make"));
+            if f.make_test {
+                cmds.push(cmd("Test", "make test"));
+            }
+            files.push(repo_name.to_string());
+        }
+        Tc::Swift => {
+            setup.push(uses("swift-actions/setup-swift@v2", &[]));
+            cmds.push(cmd("Build", "swift build -c release"));
+            cmds.push(cmd("Test", "swift test"));
+            files.push(format!(".build/release/{repo_name}"));
+        }
+        Tc::Dart => {
+            setup.push(uses("dart-lang/setup-dart@v1", &[]));
+            cmds.push(cmd("Install", "dart pub get"));
+            cmds.push(cmd("Analyze", "dart analyze"));
+        }
+        Tc::Custom => {
+            for (i, c) in spec.command.split(';').map(str::trim).filter(|c| !c.is_empty()).enumerate() {
+                cmds.push(cmd(&format!("Step {}", i + 1), c));
+            }
+        }
+    }
+    (setup, cmds, files)
+}
+
+/// `steps` as the lines of a `steps:` list indented by `by` spaces.
+fn indent_steps(steps: &[String], by: usize) -> String {
+    let pad = " ".repeat(by);
+    steps.iter().flat_map(|s| s.lines().map(|l| format!("{pad}{l}\n")).collect::<Vec<_>>()).collect()
+}
+
+/// The workflow file for `spec`, which has been through `Spec::check`.
+pub fn compile(spec: &Spec) -> String {
+    let mut y = format!("name: {}\n\n", yq(spec.name.trim()));
+
+    // Triggers.
+    y.push_str("on:\n");
+    let branches = format!("[{}]", spec.branches.iter().map(|b| yq(b)).collect::<Vec<_>>().join(", "));
+    if spec.push || spec.tags {
+        y.push_str("  push:\n");
+        if spec.push {
+            y.push_str(&format!("    branches: {branches}\n"));
+        }
+        if spec.tags {
+            y.push_str("    tags: ['v*']\n");
+        }
+    }
+    if spec.pull_request {
+        y.push_str(&format!("  pull_request:\n    branches: {branches}\n"));
+    }
+    if spec.schedule {
+        y.push_str(&format!("  schedule:\n    - cron: '{}'\n", spec.cron.split_whitespace().collect::<Vec<_>>().join(" ")));
+    }
+    if spec.dispatch {
+        y.push_str("  workflow_dispatch:\n");
+        if spec.kind == Kind::Manual {
+            y.push_str(&format!(
+                "    inputs:\n      command:\n        description: Command to run\n        required: true\n        default: {}\n",
+                yq(spec.command.trim())
+            ));
+        }
+    }
+
+    y.push_str("\npermissions:\n  contents: read\n");
+    if spec.concurrency {
+        y.push_str(&format!("\nconcurrency:\n  group: ${{{{ github.workflow }}}}-${{{{ github.ref }}}}\n  cancel-in-progress: {}\n", spec.kind != Kind::Release));
+    }
+
+    // The build job.
+    let packaging = spec.artifacts || spec.kind == Kind::Release;
+    let (setup, cmds, files) = recipe(spec, packaging);
+    let systems = systems(spec);
+    let multi = systems.len() > 1;
+    let job = if spec.kind == Kind::Manual { "run" } else { "build" };
+    y.push_str(&format!("\njobs:\n  {job}:\n"));
+    if multi {
+        y.push_str(&format!("    name: {job} (${{{{ matrix.os }}}})\n    runs-on: ${{{{ matrix.os }}}}\n    strategy:\n      fail-fast: false\n      matrix:\n        os: [{}]\n", systems.join(", ")));
+    } else {
+        y.push_str(&format!("    runs-on: {}\n", systems[0]));
+    }
+    if spec.windows {
+        y.push_str("    defaults:\n      run:\n        shell: bash\n");
+    }
+    y.push_str("    steps:\n");
+    let mut steps = vec![uses("actions/checkout@v4", &[])];
+    steps.extend(setup);
+    if spec.kind == Kind::Manual {
+        // The typed command comes in as an input; through an environment variable it is never pasted into the script.
+        steps.push("- name: Run\n  env:\n    COMMAND: ${{ inputs.command }}\n  run: bash -c \"$COMMAND\"".to_string());
+    } else {
+        steps.extend(cmds);
+    }
+    if packaging && !files.is_empty() {
+        let name = if multi { "dist-${{ matrix.os }}".to_string() } else { format!("dist-{}", systems[0]) };
+        let list = files.join("\n      ");
+        steps.push(format!("- uses: actions/upload-artifact@v4\n  with:\n    name: {name}\n    path: |\n      {list}\n    if-no-files-found: warn"));
+    }
+    y.push_str(&indent_steps(&steps, 6));
+
+    // The release job.
+    if spec.kind == Kind::Release && spec.release {
+        y.push_str("\n  release:\n    needs: build\n    if: startsWith(github.ref, 'refs/tags/')\n    runs-on: ubuntu-latest\n    permissions:\n      contents: write\n    steps:\n");
+        let release = vec![
+            uses("actions/download-artifact@v4", &[("path", "dist"), ("pattern", "dist-*"), ("merge-multiple", "true")]),
+            uses("softprops/action-gh-release@v2", &[("files", "dist/**"), ("generate_release_notes", "true")]),
+        ];
+        y.push_str(&indent_steps(&release, 6));
+    }
+    y
+}

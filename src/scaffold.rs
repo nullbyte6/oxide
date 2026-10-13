@@ -744,6 +744,11 @@ fn pin(name: &str, default: &str) -> String {
     PIN_OVERRIDES.get().and_then(|o| o.iter().find(|(k, _)| k == name)).map_or_else(|| default.to_string(), |(_, v)| v.clone())
 }
 
+/// The version of the pin `name` (see `PINS`) after `config.lua`, for code outside the language table.
+pub fn pin_value(name: &str) -> String {
+    PINS.iter().find(|(k, _, _)| *k == name).map_or_else(String::new, |(k, d, _)| pin(k, d))
+}
+
 /// Every placeholder a step may use, for `fill` and for checking the language table.
 pub const PLACEHOLDERS: &[&str] =
     &["name", "slug", "pkg", "user", "Pascal", "package_path", "PackagePascal", "package_json", "package"];
