@@ -19,7 +19,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::{App, Filter, Focus, InputKind, Mode},
+    app::{App, Choice, Filter, Focus, InputKind, Mode, ProjectStep},
     banner,
     diff::{Row, Sign},
     git::{Branch, DiffKind, FileEntry, TreeKind},
@@ -28,6 +28,7 @@ use crate::{
     logger::{self, Level},
     palette,
     repo::{Health, Owner, Repo},
+    scaffold::LANGS,
     syntax::Tok,
     term::Term,
 };
@@ -125,6 +126,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::GitHub => draw_github(f, app),
         Mode::Text => draw_text(f, app),
         Mode::Finder => draw_finder(f, app),
+        Mode::Project => draw_project(f, app),
         _ => {}
     }
     if app.mode == Mode::Terminal
@@ -137,6 +139,86 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     if app.mode == Mode::Help {
         draw_help(f);
+    }
+}
+
+/// The new-project menu: a centered popup whose content depends on the page.
+fn draw_project(f: &mut Frame, app: &mut App) {
+    let Some(v) = app.project.as_mut() else { return };
+    let name = v.repo.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let page = match v.step {
+        ProjectStep::Lang => "language",
+        ProjectStep::Variant => "variant",
+        ProjectStep::License => "license",
+        ProjectStep::Confirm => "confirm",
+    };
+    let area = f.area();
+    let w = 80.min(area.width);
+    // Rows of the page's list plus the lines around it (borders, filter or holder line).
+    let (rows, extra) = match v.step {
+        ProjectStep::Lang => (v.choices().len(), 4),
+        ProjectStep::Variant => (LANGS[v.lang].variants.len(), 3),
+        _ => (0, 0),
+    };
+    let h = (rows as u16 + extra).clamp(6, area.height.saturating_sub(2).max(6)).min(area.height);
+    let [_, mid, _] = Layout::vertical([Constraint::Fill(1), Constraint::Length(h), Constraint::Fill(1)]).areas(area);
+    let [_, popup, _] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(w), Constraint::Fill(1)]).areas(mid);
+    f.render_widget(Clear, popup);
+    let block = pane(format!(" New project · {name} · {page} "), true);
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+
+    match v.step {
+        ProjectStep::Lang => {
+            let [filter, list] = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(inner);
+            let found = v.choices();
+            let count = format!("{}/{}", found.iter().filter(|c| matches!(c, Choice::Lang(_))).count(), LANGS.len());
+            let line = Line::from(vec![
+                Span::styled("Filter ▸ ", hue(BOLD, ACCENT)),
+                Span::styled(v.query.clone(), BOLD),
+                Span::styled("█", PLAIN),
+                Span::styled(format!("  {count}"), DIM),
+            ]);
+            f.render_widget(Paragraph::new(line), filter);
+            if found.iter().all(|c| *c == Choice::Other) && !v.query.is_empty() {
+                f.render_widget(Paragraph::new("No language matches.").style(DIM.add_modifier(Modifier::ITALIC)), list);
+            }
+            let note_w = (list.width as usize).saturating_sub(17);
+            let items: Vec<ListItem> = found
+                .iter()
+                .map(|c| match c {
+                    Choice::Lang(i) => {
+                        let l = &LANGS[*i];
+                        ListItem::new(Line::from(vec![Span::styled(fit(l.name, 16), BOLD), Span::raw(" "), Span::styled(fit(l.variants[0].note, note_w), DIM)]))
+                    }
+                    Choice::Other => ListItem::new(Line::from(vec![
+                        Span::styled(fit("Other / manual…", 16), hue(BOLD, ACCENT)),
+                        Span::raw(" "),
+                        Span::styled(fit("open a terminal here and set it up yourself", note_w), DIM),
+                    ])),
+                })
+                .collect();
+            f.render_stateful_widget(List::new(items).highlight_style(INVERSE), list, &mut v.lang_state);
+        }
+        ProjectStep::Variant => {
+            let lang = &LANGS[v.lang];
+            let note_w = (inner.width as usize).saturating_sub(24);
+            let items: Vec<ListItem> = lang
+                .variants
+                .iter()
+                .enumerate()
+                .map(|(i, var)| {
+                    let default = if i == 0 { " (default)" } else { "" };
+                    ListItem::new(Line::from(vec![
+                        Span::styled(fit(&format!("{}{default}", var.name), 23), BOLD),
+                        Span::raw(" "),
+                        Span::styled(fit(var.note, note_w), DIM),
+                    ]))
+                })
+                .collect();
+            f.render_stateful_widget(List::new(items).highlight_style(INVERSE), inner, &mut v.variant_state);
+        }
+        ProjectStep::License | ProjectStep::Confirm => {}
     }
 }
 
