@@ -111,7 +111,7 @@ oxide [OPTIONS] [PATH...]
 | `B` | Open the selected repository's GitHub page in the browser |
 | `S` | Find GitHub repositories and clone them (see below) |
 | `Ctrl+P` | Find a file of the selected repository by name and read it (see *File finder and viewer* below) |
-| `Ctrl+E` | Edit the highlighted changed file in your editor, at its first line (`editor` in `config.lua`, else `$VISUAL` / `$EDITOR`, else `vi`) |
+| `Ctrl+E` | Edit the highlighted changed file in your editor, at its first line (`editor` in `config.lua`, else `$VISUAL` / `$EDITOR`, else nvim, vim or vi, whichever is installed) |
 | `e` | Open [yazi](https://yazi-rs.github.io) in the repository, with the highlighted file revealed when the changes list is focused. Open files from yazi with your usual opener (e.g. nvim). Without yazi installed it falls back to `$VISUAL` / `$EDITOR` |
 | `M` | Tasks of the selected repository: run a build, test, lint or any other command and watch its output (see *Tasks* below) |
 | `K` | New project in an empty repository: language, build tool, license, then a plan to confirm (`c` toggles a first commit, `Esc` goes back a page) |
@@ -468,7 +468,7 @@ files up to 2 MB or 50 000 lines (it says when it cuts one off; binary files are
 | `Esc`, `q` | Close (back to the finder when it came from there) |
 
 The editor runs in the whole terminal, and Oxide returns when it exits. It is `editor` in `config.lua` if
-set, else `$VISUAL`, else `$EDITOR`, else `vi`. The line is passed the way the editor expects it: `+12 file`
+set, else `$VISUAL`, else `$EDITOR`, else the first of nvim, vim and vi that is installed. The line is passed the way the editor expects it: `+12 file`
 for vi, vim, nvim, nano, micro, emacs, kak and gedit; `file:12` for helix, zed and sublime; `-g file:12` for
 VS Code and Cursor. For any other editor use `{file}` and `{line}` in `editor`, for example
 `editor = "kate -l {line} {file}"`. A graphical editor that returns at once is fine; `r` re-reads the file.

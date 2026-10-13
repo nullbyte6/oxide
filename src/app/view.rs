@@ -340,12 +340,9 @@ impl App {
 }
 
 impl App {
-    /// The editor command line: `editor` of `config.lua`, else `$VISUAL`, `$EDITOR`, else `vi`.
+    /// The editor command line: `editor` of `config.lua`, else `$VISUAL`, `$EDITOR`, else nvim, vim or vi.
     fn editor_line(&self) -> String {
-        if !self.cfg.editor.is_empty() {
-            return self.cfg.editor.clone();
-        }
-        ["VISUAL", "EDITOR"].iter().find_map(|v| std::env::var(v).ok().filter(|s| !s.trim().is_empty())).unwrap_or_else(|| "vi".to_string())
+        if self.cfg.editor.is_empty() { default_editor() } else { self.cfg.editor.clone() }
     }
 
     /// Opens `file` of `repo` in the editor at `line`; the dashboard comes back when the editor exits.

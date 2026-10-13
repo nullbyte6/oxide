@@ -177,10 +177,15 @@ fn edit(repo: &Path, path: &Path, line: usize, spec: &str) -> Result<(), String>
         .map_err(|e| format!("cannot run {program}: {e}"))
 }
 
-/// Fallback when yazi is missing: `$VISUAL` / `$EDITOR` (default `vi`) on `target`.
+/// The editor when none is configured: `$VISUAL`, then `$EDITOR`, then the first of nvim, vim and vi that is installed.
+fn default_editor() -> String {
+    let set = ["VISUAL", "EDITOR"].iter().find_map(|v| std::env::var(v).ok().filter(|s| !s.trim().is_empty()));
+    set.or_else(|| ["nvim", "vim"].iter().find(|p| scaffold::on_path(p)).map(|p| p.to_string())).unwrap_or_else(|| "vi".to_string())
+}
+
+/// Fallback when yazi is missing: the default editor on `target`.
 fn run_editor(repo: &Path, target: &Path) -> Result<(), String> {
-    let line = ["VISUAL", "EDITOR"].iter().find_map(|v| std::env::var(v).ok().filter(|s| !s.trim().is_empty()));
-    let line = line.unwrap_or_else(|| "vi".to_string());
+    let line = default_editor();
     let mut parts = line.split_whitespace().map(str::to_string);
     let program = parts.next().unwrap_or_else(|| "vi".to_string());
     Command::new(&program)

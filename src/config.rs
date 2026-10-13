@@ -47,7 +47,7 @@ pub struct Config {
     pub ci: bool,
     /// Folder that GitHub repositories are cloned into by default (`clone_dir`); the home directory otherwise.
     pub clone_dir: PathBuf,
-    /// The editor `Ctrl+E` and `e` start, with its arguments (`editor`); `$VISUAL`, `$EDITOR` or `vi` when empty.
+    /// The editor `Ctrl+E` and `e` start, with its arguments (`editor`); `$VISUAL`, `$EDITOR`, or the first of nvim, vim and vi installed when empty.
     pub editor: String,
     /// Repositories always listed first (directory names or paths from `pin` entries).
     pub pins: Vec<String>,
