@@ -28,6 +28,7 @@ screen, and lets you stage, commit, push, pull, fetch and merge without leaving 
 - **GitHub** (needs the [`gh`](https://cli.github.com) CLI, logged in): browse a repository's issues and pull requests, read them, diff and check out pull requests, find repositories (yours or anyone's) and clone them, and open things in your browser.
 - **Jump out**: open the selected file or repository in yazi, a shell or the file manager.
 - **Always current**: Oxide watches every repository's `.git` and the selected repository's working tree (Linux inotify, no extra dependency), so commits, checkouts and edits made elsewhere show up on their own; an optional timer fetches every repository.
+- **Languages**: what each repository is written in, by share of bytes and in each language's GitHub colour, counted locally from the committed files (no network, no linguist download).
 - **CI at a glance**: the latest GitHub Actions run of each repository's branch as `✓` / `✗` / spinner on the row (needs `gh`).
 - **Non-blocking**: scans and git commands run on background threads; the UI never freezes.
 - **Search**: filter the list live by name, branch or path.
@@ -73,7 +74,7 @@ oxide [OPTIONS] [PATH...]
 | --- | --- |
 | `↑` `↓` / `j` `k` | Move selection |
 | `g` / `G` | First / last item |
-| `Tab`, `←` `→` | Switch between the repository list and the changes list |
+| `Tab` / `Shift+Tab`, `←` `→` | Move the focus between the repository list, the Languages pane and the changes list (see *Languages*) |
 | `f`, `1` `2` `3` `4` | Filter: cycle, or All / Owned / Cloned / Attention |
 | `s` | Sort: name / recent / changes / behind (pinned repositories always come first) |
 | `D` | **Delete the repository's folder from disk** (see below) |
@@ -183,6 +184,29 @@ pulls, resets, rebases. Every action asks `y` first.
 | `Esc`, `q`, `O` | Close |
 
 With the first entry highlighted, `u` is a one-key undo of the last thing that happened.
+
+### Languages
+
+The details panel shows a `langs` line for the selected repository: a stacked bar in each language's colour
+and the top three languages with their share (`Rust 82% · Lua 12% · Shell 3% +2`). `Tab` (or `→`) moves the focus
+to the Languages pane, which then fills the panel (the Changes list shrinks to a few rows) with one row per
+language: swatch, name, a bar, the share, the size and the number of files. `↑` `↓` / `g` `G` scroll; `Esc`
+goes back to the list.
+
+How it is counted, all locally and without checking anything out:
+
+- One `git ls-tree -r -l HEAD` gives the size of every committed file; shares are by **bytes**, like GitHub.
+  Uncommitted files and ignored files do not count. The result is cached per repository and recomputed
+  when HEAD moves; only the selected repository is counted.
+- A built-in table (`src/langs.rs`, about 100 languages) maps file extensions and a few file names
+  (`Makefile`, `Dockerfile`, `CMakeLists.txt` ...) to a language and its GitHub colour. Edit the table to
+  add a language or fix a colour.
+- Like GitHub, only programming and markup languages count: prose (Markdown, text) and data formats (JSON,
+  YAML, TOML, XML) are left out. `vendor`, `node_modules`, `third_party` and similar folders and generated or
+  minified files (`*.min.js`, `*.pb.go` ...) are skipped. `.h` headers count as C++ when the repository has
+  C++ sources, else as C.
+- Colours are true colour when `COLORTERM` says the terminal supports it, else the nearest of the 256
+  colours. With colors off (`C`) the languages are told apart by fill shade (`█ ▓ ▒ ░`) instead.
 
 ### Live updates and CI
 
@@ -420,6 +444,7 @@ run in batch mode unless you set `core.sshCommand`, `GIT_SSH_COMMAND` or `GIT_SS
 | `src/git.rs` | `git` CLI wrapper: status parsing, operations and diffs |
 | `src/diff.rs` | Parses `git diff` output into rows for the diff viewer |
 | `src/syntax.rs` | Dependency-free syntax highlighter used by the diff viewer |
+| `src/langs.rs` | Built-in language table (extensions, colours) and the per-repository language count |
 | `src/watch.rs` | inotify file watching of `.git` directories and the selected working tree |
 | `src/repo.rs` | Repository model, discovery, owned/cloned classification |
 | `src/worker.rs` | Background scan and operation threads |
