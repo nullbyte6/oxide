@@ -688,6 +688,8 @@ pub struct App {
     tree_done: Option<PathBuf>,
     /// Repositories being fetched by the timer; their results are only logged when something fails.
     quiet: HashSet<PathBuf>,
+    /// The remote a running `remote fetch` was started for, so a missing repository is offered for that remote.
+    fetching: HashMap<PathBuf, String>,
     /// An automatic fetch already reported a failure in this round.
     auto_failed: bool,
     /// When the timer last started an automatic fetch (or when Oxide started).
@@ -822,6 +824,7 @@ impl App {
             tree: None,
             tree_done: None,
             quiet: HashSet::new(),
+            fetching: HashMap::new(),
             auto_failed: false,
             auto_at: Instant::now(),
             ci: HashMap::new(),
@@ -908,6 +911,9 @@ impl App {
                 continue;
             }
             self.busy.insert(path.clone(), op.label());
+            if let Op::RemoteFetch(name) = &op {
+                self.fetching.insert(path.clone(), name.clone());
+            }
             accepted.push((path, op));
         }
         if !accepted.is_empty() {
@@ -1138,6 +1144,7 @@ impl App {
                 }
                 Msg::Op { path, label, result } => {
                     self.busy.remove(&path);
+                    let fetched = self.fetching.remove(&path);
                     if self.branches.as_ref().is_some_and(|v| v.repo == path) {
                         self.load_branches(); // switching, creating or deleting changed the list
                     }
@@ -1189,7 +1196,7 @@ impl App {
                                 self.log(Level::Info, format!("  {}", line.trim()));
                             }
                         }
-                        Err(err) if matches!(label, "fetch" | "remote fetch") && err.contains("Repository not found") && self.offer_create(&path) => {
+                        Err(err) if matches!(label, "fetch" | "remote fetch") && err.contains("Repository not found") && self.offer_create(&path, fetched, &err) => {
                             self.log(Level::Warn, format!("{name}: the remote repository does not exist yet"));
                         }
                         Err(err) => {
@@ -2619,8 +2626,25 @@ impl App {
     }
 
     /// Asks whether to create the missing GitHub repository behind `path`'s remote; false when the remote is not on GitHub.
-    fn offer_create(&mut self, path: &Path) -> bool {
-        let Some(slug) = git::remote_url(path).and_then(|u| github::slug(&u)) else { return false };
+    /// The remote is the one a `remote fetch` named; for `fetch --all` it is the one git was fetching
+    /// (the last `Fetching <name>` line) when it reported the missing repository, else the default remote.
+    fn offer_create(&mut self, path: &Path, remote: Option<String>, err: &str) -> bool {
+        let remote = remote.or_else(|| {
+            let mut current = None;
+            for line in err.lines() {
+                if let Some(name) = line.trim().strip_prefix("Fetching ") {
+                    current = Some(name.trim().to_string());
+                } else if line.contains("Repository not found") {
+                    return current;
+                }
+            }
+            None
+        });
+        let url = match remote {
+            Some(name) => git::named_remote_url(path, &name),
+            None => git::remote_url(path),
+        };
+        let Some(slug) = url.and_then(|u| github::slug(&u)) else { return false };
         self.visibility = Some(Visibility { path: path.to_path_buf(), slug, private: true, back: self.mode });
         self.mode = Mode::Visibility;
         true

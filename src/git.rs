@@ -251,6 +251,12 @@ pub fn remote_url(repo: &Path) -> Option<String> {
     Some(url.trim().to_string()).filter(|u| !u.is_empty())
 }
 
+/// URL of the remote `name`.
+pub fn named_remote_url(repo: &Path, name: &str) -> Option<String> {
+    let url = run(repo, &["config", "--get", &format!("remote.{name}.url")]).ok()?;
+    Some(url.trim().to_string()).filter(|u| !u.is_empty())
+}
+
 /// Whether a path of the repository is in step with the last commit.
 #[derive(Clone, Copy, PartialEq)]
 pub enum PathState {
