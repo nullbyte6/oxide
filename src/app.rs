@@ -787,6 +787,11 @@ impl App {
         self.log.last()
     }
 
+    /// The newest log line while it is fresh, whether or not the log panel is shown.
+    pub fn fresh_log(&self) -> Option<&LogLine> {
+        if self.tick.wrapping_sub(self.log_tick) >= TOAST_TICKS { None } else { self.log.last() }
+    }
+
     /// The name of the remote an open input line is about, for its prompt.
     pub fn remote_name(&self) -> &str {
         self.remote_target.as_deref().unwrap_or("")

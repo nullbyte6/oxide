@@ -6,6 +6,7 @@ use crate::workflow::InputKind;
 /// The workflows of a repository as a popup: name, file, whether they can be started by hand, and the latest run.
 pub(super) fn draw_workflows(f: &mut Frame, app: &mut App) {
     let last = app.log.last().map(|l| l.text.clone()).unwrap_or_default();
+    let fresh = app.fresh_log().map(|l| l.text.clone());
     let tick = app.tick;
     let Some(v) = app.workflows.as_mut() else { return };
     let rows = v.items.len().max(1) as u16;
@@ -16,8 +17,9 @@ pub(super) fn draw_workflows(f: &mut Frame, app: &mut App) {
     let [_, popup, _] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(w), Constraint::Fill(1)]).areas(mid);
     f.render_widget(Clear, popup);
     // The bottom line says what could not be learned (no gh, no GitHub remote), else the newest log message.
-    let note = match &v.runs {
-        Some(Err(e)) => format!("latest runs: {}", e.lines().next().unwrap_or("")),
+    let note = match (&fresh, &v.runs) {
+        (Some(msg), _) => msg.trim().to_string(),
+        (None, Some(Err(e))) => format!("latest runs: {}", e.lines().next().unwrap_or("")),
         _ => last,
     };
     let block = pane(format!(" Workflows · {} ", v.name), true).title_bottom(Line::from(Span::styled(format!(" {note} "), DIM)));
