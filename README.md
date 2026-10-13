@@ -102,6 +102,7 @@ oxide [OPTIONS] [PATH...]
 | `v` | Commit log of the selected repository (see below) |
 | `b` | Branches of the selected repository (see below) |
 | `W` | Worktrees and submodules of the selected repository (see below) |
+| `V` | Tags and releases of the selected repository (see below) |
 | `I` | `git init` in a folder: the prompt starts with the current directory, append a name for a new folder |
 | `i` / `y` | GitHub issues / pull requests of the selected repository (see below) |
 | `B` | Open the selected repository's GitHub page in the browser |
@@ -312,6 +313,23 @@ when they are not in sync). It works from a linked worktree too: the commands th
 
 Linked worktrees are repositories like any other and appear in the list; submodules do not, since nested
 repositories are not scanned.
+
+### Tags and releases
+
+`V` lists the repository's tags, newest first. Each row shows whether the tag is annotated (`◆`) or lightweight
+(`·`), the commit, its age, whether the remote has it (`pushed`, `local`, or `…` / `?` while the server is being
+asked or cannot be reached), its GitHub release (`release`, `latest`, `pre` or `draft`) and its message. The remote
+and the releases load in the background, so the list is there at once.
+
+| Key | Action |
+| --- | --- |
+| `n` | New tag on `HEAD`. The prompt starts with the next version (`v0.2.0` suggests `v0.2.1`); type a name, optionally followed by a message, which makes it an annotated tag |
+| `p` | Push the highlighted tag to the remote (`origin`, else the first) |
+| `d` / `D` | Delete the tag here / here and on the remote, after a confirmation |
+| `r` / `R` | Create a GitHub release / draft release for the tag with generated notes (needs `gh`, a `github.com` remote and the tag already pushed; a confirmation first) |
+| `o` | Open the tag's release in the browser |
+| `Enter` | Show the commit the tag points at in the diff viewer |
+| `f` | Ask the remote and GitHub again |
 
 ### git init
 
