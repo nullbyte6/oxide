@@ -2504,6 +2504,12 @@ impl App {
         };
         self.mode = confirm.back;
         if key.code == KeyCode::Char('y') {
+            if self.mode == Mode::WorkflowRun {
+                // The run is started: the form and the workflows list are done with, not left open behind it.
+                self.run_form = None;
+                self.workflows = None;
+                self.mode = Mode::Normal;
+            }
             self.run_ops(confirm.jobs);
         } else {
             self.log(Level::Info, "cancelled");

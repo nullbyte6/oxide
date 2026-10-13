@@ -542,7 +542,8 @@ impl App {
             Op::NewWorkflow { file: w.file.clone(), text: w.yaml.clone(), publish, message: format!("Add {} workflow", w.spec.name), dispatch },
         );
         self.wizard = None;
-        self.mode = Mode::Workflows;
+        self.workflows = None; // the wizard is done: no popup stays open behind it
+        self.mode = Mode::Normal;
         self.run_ops(vec![job]);
     }
 }
