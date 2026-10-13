@@ -7,6 +7,7 @@ mod diff;
 mod git;
 mod github;
 mod langs;
+mod license;
 mod logger;
 mod marks;
 mod palette;

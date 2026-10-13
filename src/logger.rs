@@ -107,6 +107,11 @@ pub fn clock() -> String {
     hms(local_secs())
 }
 
+/// The current year in local time (for the copyright line of a new LICENSE).
+pub fn year() -> i64 {
+    civil_from_days(local_secs().div_euclid(86_400)).0
+}
+
 /// ISO-8601 local timestamp with its UTC offset, e.g. `2026-10-12T17:45:00+02:00`.
 fn timestamp() -> String {
     let now = local_secs(); // read once so the date and the time always agree
