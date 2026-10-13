@@ -990,14 +990,21 @@ impl App {
                         Ok(out) => {
                             self.log(Level::Ok, format!("{name}: {label} ok"));
                             // Hook output (pre-commit, commit-msg ...) is part of a commit's result; show more of it.
-                            let shown = if matches!(label, "commit" | "amend") { 12 } else { 3 };
+                            let shown = match label {
+                                "commit" | "amend" => 12,
+                                "set up" => 30, // one line per step of the plan
+                                _ => 3,
+                            };
                             for line in out.lines().filter(|l| !l.trim().is_empty()).take(shown) {
                                 self.log(Level::Info, format!("  {}", line.trim()));
                             }
                         }
                         Err(err) => {
                             self.log(Level::Error, format!("{name}: {label} failed"));
-                            let shown = if matches!(label, "commit" | "amend") { 12 } else { 6 };
+                            let shown = match label {
+                                "commit" | "amend" | "set up" => 12,
+                                _ => 6,
+                            };
                             for line in err.lines().filter(|l| !l.trim().is_empty()).take(shown) {
                                 self.log(Level::Error, format!("  {}", line.trim()));
                             }
@@ -2599,9 +2606,10 @@ impl App {
                 KeyCode::Esc | KeyCode::Backspace => v.step = ProjectStep::License,
                 KeyCode::Char('c' | ' ') => v.commit = !v.commit,
                 KeyCode::Enter => {
-                    let (name, n) = v.plan.as_ref().map_or((String::new(), 0), |p| (p.name.clone(), p.actions.len()));
+                    let (repo, commit) = (v.repo.clone(), v.commit);
+                    let Some(plan) = v.plan.take() else { return };
                     self.close_project();
-                    self.log(Level::Info, format!("{name}: {n} setup actions planned (running them is not wired up yet)"));
+                    self.run_ops(vec![(repo, Op::Setup { plan: Box::new(plan), commit })]);
                 }
                 _ => {}
             },

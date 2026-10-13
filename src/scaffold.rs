@@ -298,7 +298,7 @@ pub enum Write {
 }
 
 /// A step with its placeholders filled in.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Action {
     Run { program: String, args: Vec<String> },
     File { path: String, text: String, mode: Write },
@@ -317,10 +317,8 @@ impl Action {
 }
 
 /// Everything setting a project up will do, in order, without having done any of it yet.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Plan {
-    /// The project name: the name of its directory.
-    pub name: String,
     pub actions: Vec<Action>,
     /// Programs the variant needs that are not on `PATH`; their commands are left out of `actions`.
     pub missing: Vec<String>,
@@ -364,7 +362,7 @@ impl Plan {
         if let Some(l) = license {
             actions.push(Action::File { path: "LICENSE".to_string(), text: l.text(holder, year), mode: Write::Always });
         }
-        Plan { name, actions, missing }
+        Plan { actions, missing }
     }
 }
 

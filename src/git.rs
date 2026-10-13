@@ -1,5 +1,7 @@
 //! Thin wrapper around the `git` command line: status parsing and repository operations.
 
+use crate::scaffold::Plan;
+
 use std::{
     env,
     path::{Path, PathBuf},
@@ -97,6 +99,8 @@ pub enum Op {
     RemoteFetch(String),
     /// Apply one hunk of a diff to the index: stage it, or with `reverse` unstage it.
     Hunk { patch: String, reverse: bool },
+    /// Set a new project up with a plan from the new-project menu; `commit` also commits the result.
+    Setup { plan: Box<Plan>, commit: bool },
 }
 
 impl Op {
@@ -134,6 +138,7 @@ impl Op {
             Op::Checkout(_) => "checkout",
             Op::Hunk { reverse: false, .. } => "stage hunk",
             Op::Hunk { reverse: true, .. } => "unstage hunk",
+            Op::Setup { .. } => "set up",
         }
     }
 }
@@ -540,6 +545,30 @@ pub fn branches(repo: &Path) -> Result<Vec<Branch>, String> {
         .collect())
 }
 
+/// Message of the commit that can follow a project setup.
+const SETUP_COMMIT: &str = "Add initial commit and projects' initial files";
+
+/// Does the plan in `repo`, then commits everything when asked. The text is one line per finished step,
+/// and on failure ends with the reason.
+fn setup(repo: &Path, plan: &Plan, commit: bool) -> Result<String, String> {
+    let mut lines = Vec::new();
+    if let Err(e) = plan.apply(repo, |l| lines.push(l)) {
+        lines.push(e);
+        return Err(lines.join("\n"));
+    }
+    if commit {
+        let made = run_all(repo, &["add", "-A"]).and_then(|_| run_all(repo, &["commit", "-m", SETUP_COMMIT]));
+        match made {
+            Ok(_) => lines.push(format!("committed: {SETUP_COMMIT}")),
+            Err(e) => {
+                lines.push(format!("the files were made, but the commit failed: {e}"));
+                return Err(lines.join("\n"));
+            }
+        }
+    }
+    Ok(lines.join("\n"))
+}
+
 /// Runs `op` in `repo`; the Ok/Err text is the command output for the log.
 pub fn perform(repo: &Path, op: &Op) -> Result<String, String> {
     match op {
@@ -561,6 +590,7 @@ pub fn perform(repo: &Path, op: &Op) -> Result<String, String> {
         Op::StageAll => run_all(repo, &["add", "-A"]),
         Op::UnstageAll => run_all(repo, &["reset", "-q"]),
         Op::Commit(msg) => run_all(repo, &["commit", "-m", msg]),
+        Op::Setup { plan, commit } => setup(repo, plan, *commit),
         Op::Stash => run_all(repo, &["stash", "push", "--include-untracked", "-m", "oxide stash"]),
         Op::StashPop => run_all(repo, &["stash", "pop"]),
         Op::Init => {
