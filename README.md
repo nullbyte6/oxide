@@ -474,14 +474,20 @@ clone_dir = "~/dev"
 pin = { "oxide" }
 ignore = { "~/dev/vendor" }
 
+-- versions the new-project templates pin; a string (or a whole number) replaces the default. Unset ones keep it.
+-- java 21, junit 5.11.4, surefire 3.5.2, kotlin 2.1.0, scala 3.3.4, sbt 1.10.7, munit 1.0.3, clojure 1.12.0,
+-- dotnet net8.0, php 8.1, python 3.10, dart 3.0.0, nim 2.0.0, c_std 11, cpp_std 20, cmake 3.16
+-- (java also sets the Kotlin JVM target; php, python, dart and nim are minimum versions)
+versions = { java = "17", kotlin = "2.0.21", dotnet = "net9.0" }
+
 -- languages for the new-project menu (K), added to the built-in ones. A language has a name, optional
 -- .gitignore lines (ignore) and either variants or, for a single setup, run / dirs / files directly.
 -- A language that keeps its code in packages sets package (a suggestion); the menu then asks for the names and
 -- steps can use {package} (org.acme.app) and {package_path} (org/acme/app). Names are checked like Java's; use `{package}` as it is typed.
 -- A variant is done in this order: run (command lines, no shell), dirs, files (path = contents). Its optional
 -- check (a command line or a list) is only used by oxide --check-setups, run inside the finished project.
--- Command lines and contents may use {name} (the directory name), {slug} (my-app), {pkg} (my_app)
--- and {user} (your git user name). A built-in language is replaced by one with the same name.
+-- Command lines and contents may use {name} (the directory name), {slug} (my-app), {pkg} (my_app),
+-- {user} (your git user name) and a pinned version as {v_java}, {v_junit} ... (the names of `versions`). A built-in language is replaced by one with the same name.
 languages = {
   {
     name = "OCaml",
