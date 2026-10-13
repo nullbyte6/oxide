@@ -57,7 +57,7 @@ OPTIONS:
     -V, --version  Show the version
 
 FILES:
-    ~/.config/oxide/config.lua   Lua script: root, owner, email, depth, color, hints, logs, ci, autofetch, clone_dir, pin, ignore, languages
+    ~/.config/oxide/config.lua   Lua script: root, owner, email, depth, color, hints, logs, ci, autofetch, clone_dir, pin, ignore, languages, versions, editor, tasks
     ~/.local/state/oxide/oxide.log
     ~/.local/state/oxide/marks   repositories pinned or ignored with the * and x keys
 ";

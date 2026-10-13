@@ -27,6 +27,7 @@ screen, and lets you stage, commit, push, pull, fetch and merge without leaving 
 - **`git init` anywhere**: initialise a repository in any folder, existing or new, and see it in the list right away.
 - **GitHub** (needs the [`gh`](https://cli.github.com) CLI, logged in): browse a repository's issues and pull requests, read them, diff and check out pull requests, find repositories (yours or anyone's) and clone them, and open things in your browser.
 - **Files and editing**: `Ctrl+P` finds any file of the repository by name (fuzzy, changed files first) and opens it in a read-only viewer with line numbers, highlighting, search and go to line; `e` opens the file in your editor at the cursor line (`Ctrl+E` on the highlighted changed file, `e` in the diff), and Oxide comes back with everything reloaded when the editor exits.
+- **Tasks**: `M` lists the build, test, lint and run commands the repository offers (found from `Cargo.toml`, `package.json`, `go.mod`, `Makefile`, `justfile`, Gradle, Maven, CMake, .NET, Python and others, plus your own from `config.lua`), runs the one you pick and streams its output; error locations (`src/main.rs:12:5`, Python tracebacks ...) can be stepped through with `n` and opened in the viewer or your editor.
 - **Jump out**: open the selected file or repository in yazi or the file manager.
 - **New project**: `K` in an empty repository opens a menu to set it up for 25 languages (Rust, Python, JavaScript, TypeScript, Go, Java, Kotlin, C, C++, C#, PHP, Ruby, Swift, Dart, Lua, Zig, Elixir, Haskell, Scala, R, Julia, Shell, Nim, Perl, Clojure): pick the language (type to filter), the build tool where there is a choice (Maven by default for Java), a license (11 offered, holder and year filled in) and review the exact commands and files before anything is done; the setup then runs in the background, with an optional first commit. *Other / manual…* opens the embedded terminal instead.
 - **Embedded terminal**: `t` / `T` opens a shell inside Oxide, in the selected repository, on a pseudo-terminal with colors, full-screen programs and scrollback; `Ctrl+T` hides it and the shell keeps running.
@@ -112,6 +113,7 @@ oxide [OPTIONS] [PATH...]
 | `Ctrl+P` | Find a file of the selected repository by name and read it (see *File finder and viewer* below) |
 | `Ctrl+E` | Edit the highlighted changed file in your editor, at its first line (`editor` in `config.lua`, else `$VISUAL` / `$EDITOR`, else `vi`) |
 | `e` | Open [yazi](https://yazi-rs.github.io) in the repository, with the highlighted file revealed when the changes list is focused. Open files from yazi with your usual opener (e.g. nvim). Without yazi installed it falls back to `$VISUAL` / `$EDITOR` |
+| `M` | Tasks of the selected repository: run a build, test, lint or any other command and watch its output (see *Tasks* below) |
 | `K` | New project in an empty repository: language, build tool, license, then a plan to confirm (`c` toggles a first commit, `Esc` goes back a page) |
 | `X` | Undo the last project setup of the selected repository (see "New project") |
 | `t` / `T` | Open the embedded terminal (`$SHELL`) in the repository, or, with the changes list focused, in the folder of the highlighted file (each folder has its own shell, named in the title); `Ctrl+T` hides it, `Shift+PgUp` / `Shift+PgDn` scroll its history, `exit` closes it |
@@ -471,6 +473,51 @@ for vi, vim, nvim, nano, micro, emacs, kak and gedit; `file:12` for helix, zed a
 VS Code and Cursor. For any other editor use `{file}` and `{line}` in `editor`, for example
 `editor = "kate -l {line} {file}"`. A graphical editor that returns at once is fine; `r` re-reads the file.
 
+### Tasks
+
+`M` lists what the selected repository can run. Oxide finds the commands from the project files it knows:
+
+| File | Tasks |
+| --- | --- |
+| `Cargo.toml` | `build`, `test`, `check`, `lint` (clippy), `fmt`, `run` |
+| `package.json`, `composer.json` | every script, run with pnpm, yarn, bun or npm by the lock file (composer: `composer run-script`) |
+| `go.mod` | `build`, `test`, `vet`, `run` |
+| `pom.xml`, `build.gradle(.kts)`, `build.sbt` | build, test, package / check, run (`./gradlew` when the wrapper exists) |
+| `CMakeLists.txt`, `build.zig`, `Package.swift`, `mix.exs`, `pubspec.yaml`, `project.clj`, `stack.yaml`, `Rakefile` | the usual build, test and run commands of each |
+| `*.sln`, `*.csproj`, `*.fsproj` | `dotnet build`, `test`, `run` |
+| `pyproject.toml`, `setup.py`, `pytest.ini`, `tox.ini` | `test` (`python -m pytest`), and `lint` (`ruff check .`) when ruff is configured |
+| `Makefile`, `justfile` | every target / recipe |
+
+Names that could not be typed safely into a shell (a script called `x; rm -rf ~`) are left out. Add your own, for
+every repository or for one, with `tasks` in `config.lua`; a task with the name of a detected one replaces it:
+
+```lua
+tasks = {
+  { name = "deploy", run = "./scripts/deploy.sh --dry-run" },              -- every repository
+  { name = "serve",  run = "python -m http.server 8000", repo = "site" },  -- only the one called "site"
+}
+```
+
+`Enter` runs the highlighted task in the repository and opens its output: standard output and error together,
+in order, as they arrive, with colors and progress rewrites reduced to the text. The menu starts on the task
+that ran last. One task runs at a time; closing Oxide stops it, and the repository is reloaded when it ends.
+The result is also written to the log (`test: passed in 3.2 s`, `build: failed (exit 101) in 1.1 s`).
+
+| Key | Action |
+| --- | --- |
+| `↑` `↓` / `j` `k`, `Space` / `b`, `g` / `G` | Scroll; `G` follows the output again |
+| `← →` / `h` `l`, `0` | Pan long lines |
+| `n` / `N` | Select the next / previous line that points at a place in a file (`›` marks them, `▸` the selected one) |
+| `Enter` | Open that place in the code viewer (`Esc` comes back here) |
+| `e` | Open that place in your editor |
+| `c` | Stop the task (it gets `SIGTERM`, and `SIGKILL` after three seconds) |
+| `r` | Run it again, when it has ended |
+| `Esc`, `q` | Close; while the task still runs it only hides the output (`M`, then `o`, shows it again) |
+
+Places are found in compiler and test output (`src/main.rs:12:5`, `--> src/main.rs:12:5`, `file.ts(12,5)`,
+Python's `File "x.py", line 12`, Maven's `File.java:[12,5]`), only when the file exists inside the repository.
+Lines that read as errors are red and warnings yellow.
+
 ### Diff viewer
 
 `d` opens the highlighted file's diff full screen: untracked files are shown as entirely added, and a file
@@ -588,6 +635,10 @@ ci = true
 -- folder that GitHub repositories are cloned into by default (home directory when unset)
 clone_dir = "~/dev"
 
+-- commands for the task menu (M): a name and a command, for every repository or only for one (a directory name,
+-- or a path when it holds a "/" or starts with "~"); a name that a project file also offers replaces it
+tasks = { { name = "deploy", run = "./scripts/deploy.sh" }, { name = "serve", run = "python -m http.server", repo = "site" } }
+
 -- the editor `e` and `Ctrl+E` start, with its arguments; {file} and {line} are replaced if you write them.
 -- Default: $VISUAL, then $EDITOR, then vi
 editor = "nvim"
@@ -680,6 +731,7 @@ run in batch mode unless you set `core.sshCommand`, `GIT_SSH_COMMAND` or `GIT_SS
 | `src/ui.rs` | Ratatui rendering |
 | `src/github.rs` | GitHub through the `gh` CLI: remote parsing, issue and pull request lists |
 | `src/git.rs` | `git` CLI wrapper: status parsing, operations and diffs |
+| `src/tasks.rs` | Finds a repository's tasks from its project files, runs one in the background and reads its output (places, errors) |
 | `src/code.rs` | Reads and highlights a source file for the code viewer |
 | `src/diff.rs` | Parses `git diff` output into rows for the diff viewer |
 | `src/syntax.rs` | Dependency-free syntax highlighter used by the diff viewer |

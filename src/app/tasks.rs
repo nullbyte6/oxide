@@ -4,7 +4,7 @@
 use std::time::Instant;
 
 use super::*;
-use crate::tasks::{self, Handle, Task};
+use crate::tasks::{self, Handle, Out, Task};
 
 /// The output pane keeps this many lines; older ones are dropped (and counted).
 const KEPT: usize = 20_000;
@@ -30,7 +30,9 @@ pub struct TaskView {
     pub repo: PathBuf,
     pub name: String,
     pub cmd: String,
-    pub lines: Vec<String>,
+    pub lines: Vec<Out>,
+    /// The line (index into `lines`) selected with `n` / `N`, which has a place in a file for `Enter` to open.
+    pub sel: Option<usize>,
     /// Lines dropped from the top because the output grew past `KEPT`.
     pub dropped: usize,
     pub state: TaskState,
@@ -47,12 +49,39 @@ pub struct TaskView {
     id: u64,
 }
 
+impl TaskView {
+    /// How many lines point at a place in a file.
+    pub fn places(&self) -> usize {
+        self.lines.iter().filter(|l| l.loc.is_some()).count()
+    }
+
+    /// Selects the next (or previous) line that points at a place in a file, wrapping around, and shows it.
+    fn jump(&mut self, forward: bool) {
+        let from = self.sel.unwrap_or(if forward { self.scroll } else { self.scroll + self.height });
+        let has = |i: &usize| self.lines[*i].loc.is_some();
+        let n = self.lines.len();
+        let found = if forward {
+            ((from + usize::from(self.sel.is_some()))..n).find(has).or_else(|| (0..n).find(has))
+        } else {
+            (0..from.min(n)).rev().find(has).or_else(|| (0..n).rev().find(has))
+        };
+        let Some(at) = found else { return };
+        self.sel = Some(at);
+        self.follow = false;
+        if at < self.scroll || at >= self.scroll + self.height.max(1) {
+            self.scroll = at.saturating_sub(self.height / 2);
+        }
+    }
+}
+
 impl App {
     /// `M`: lists the tasks of the selected repository.
     pub(super) fn open_tasks(&mut self) {
         let Some((repo, name)) = self.selected().map(|r| (r.path.clone(), r.name.clone())) else { return };
         let items = tasks::detect(&repo, &self.cfg.tasks);
-        let state = ListState::default().with_selected(if items.is_empty() { None } else { Some(0) });
+        // The menu starts on the task that ran last in this repository.
+        let last = self.task.as_ref().filter(|t| t.repo == repo).and_then(|t| items.iter().position(|i| i.name == t.name));
+        let state = ListState::default().with_selected(if items.is_empty() { None } else { Some(last.unwrap_or(0)) });
         self.tasks = Some(TasksView { repo, name, items, state });
         self.mode = Mode::Tasks;
     }
@@ -105,6 +134,7 @@ impl App {
                     name,
                     cmd,
                     lines: Vec::new(),
+                    sel: None,
                     dropped: 0,
                     state: TaskState::Running,
                     follow: true,
@@ -123,7 +153,7 @@ impl App {
         }
     }
 
-    pub(super) fn task_lines(&mut self, id: u64, lines: Vec<String>) {
+    pub(super) fn task_lines(&mut self, id: u64, lines: Vec<Out>) {
         let Some(v) = self.task.as_mut().filter(|v| v.id == id) else { return };
         v.lines.extend(lines);
         if v.lines.len() > KEPT {
@@ -131,6 +161,7 @@ impl App {
             v.lines.drain(..extra);
             v.dropped += extra;
             v.scroll = v.scroll.saturating_sub(extra);
+            v.sel = v.sel.and_then(|s| s.checked_sub(extra));
         }
     }
 
@@ -180,6 +211,16 @@ impl App {
             KeyCode::Right | KeyCode::Char('l') => v.hscroll += 8,
             KeyCode::Left | KeyCode::Char('h') => v.hscroll = v.hscroll.saturating_sub(8),
             KeyCode::Char('0') => v.hscroll = 0,
+            KeyCode::Char('n') => v.jump(true),
+            KeyCode::Char('N') => v.jump(false),
+            KeyCode::Enter | KeyCode::Char('e') => {
+                let place = v.sel.and_then(|i| v.lines.get(i)).and_then(|l| l.loc.clone()).map(|loc| (v.repo.clone(), loc));
+                match (place, key.code == KeyCode::Enter) {
+                    (Some((repo, loc)), true) => self.open_code(repo, loc.file, Some(loc.line), Mode::Task),
+                    (Some((repo, loc)), false) => self.start_edit(repo, loc.file, loc.line),
+                    (None, _) => self.log(Level::Info, "n selects the next place in a file that the output points at"),
+                }
+            }
             KeyCode::Char('c') => {
                 if let Some(h) = v.handle.as_ref().filter(|_| v.state == TaskState::Running) {
                     h.cancel();

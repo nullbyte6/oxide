@@ -3,7 +3,7 @@
 use super::*;
 use ratatui::widgets::Wrap;
 
-use crate::app::TaskState;
+use crate::{app::TaskState, tasks::Sev};
 
 /// The tasks of a repository as a popup: name, command and where it comes from.
 pub(super) fn draw_tasks(f: &mut Frame, app: &mut App) {
@@ -67,9 +67,27 @@ pub(super) fn draw_task(f: &mut Frame, app: &mut App) {
     v.scroll = if v.follow { max } else { v.scroll.min(max) };
     let last = (v.scroll + v.height).min(total);
     let dropped = if v.dropped > 0 { format!(" · first {} lines dropped", v.dropped) } else { String::new() };
+    let places = v.places();
+    let places = if places > 0 { format!("{places} places · ") } else { String::new() };
     let block = pane(format!(" Task · {name} · {} ", v.name), true)
-        .title_top(Line::from(vec![status, Span::styled(format!("{}-{last}/{total}{dropped} ", (v.scroll + 1).min(total)), DIM)]).right_aligned())
+        .title_top(Line::from(vec![status, Span::styled(format!("{places}{}-{last}/{total}{dropped} ", (v.scroll + 1).min(total)), DIM)]).right_aligned())
         .title_bottom(Line::from(Span::styled(format!(" $ {} ", v.cmd), DIM)));
-    let lines: Vec<Line> = v.lines[v.scroll..last].iter().map(|l| Line::from(Span::raw(l.chars().skip(v.hscroll).collect::<String>()))).collect();
+    let lines: Vec<Line> = (v.scroll..last)
+        .map(|i| {
+            let l = &v.lines[i];
+            let (mark, mark_style) = match (v.sel == Some(i), l.loc.is_some()) {
+                (true, _) => ("▸ ", hue(BOLD, ACCENT)),
+                (false, true) => ("› ", DIM),
+                _ => ("  ", DIM),
+            };
+            let style = match l.sev {
+                Sev::Error => hue(PLAIN, BAD),
+                Sev::Warn => hue(PLAIN, WARN),
+                Sev::None => PLAIN,
+            };
+            let text = l.text.chars().skip(v.hscroll).collect::<String>();
+            Line::from(vec![Span::styled(mark, mark_style), Span::styled(text, if v.sel == Some(i) { style.add_modifier(Modifier::BOLD) } else { style })])
+        })
+        .collect();
     f.render_widget(Paragraph::new(lines).block(block), area);
 }

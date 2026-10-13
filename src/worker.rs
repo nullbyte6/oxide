@@ -74,7 +74,7 @@ pub enum Msg {
     /// A source file read for the code viewer (or the error) requested with the given id.
     Code { id: u64, result: Result<code::Loaded, String> },
     /// Lines of output of the task started with the given id.
-    TaskLines { id: u64, lines: Vec<String> },
+    TaskLines { id: u64, lines: Vec<crate::tasks::Out> },
     /// The task with the given id ended: its exit code (None when a signal stopped it) and how long it ran.
     TaskDone { id: u64, code: Option<i32>, secs: f64 },
     /// An operation finished.

@@ -876,7 +876,10 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
     if let (Mode::Task, Some(v)) = (app.mode, &app.task) {
-        let mut hints = vec![("↑↓", "scroll"), ("Space", "page"), ("g G", "top/end"), ("← →", "pan")];
+        let mut hints = vec![("↑↓", "scroll"), ("Space", "page"), ("g G", "top/end")];
+        if v.places() > 0 {
+            hints.extend([("n N", "next place"), ("Enter", "open"), ("e", "edit")]);
+        }
         if v.state == TaskState::Running {
             hints.push(("c", "stop"));
             hints.push(("Esc", "hide"));

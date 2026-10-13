@@ -265,6 +265,84 @@ impl Drop for Handle {
     }
 }
 
+/// How a line of output reads.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Sev {
+    None,
+    Warn,
+    Error,
+}
+
+/// A place in a file of the repository that a line of output points at.
+#[derive(Clone)]
+pub struct Loc {
+    /// Relative to the repository.
+    pub file: String,
+    /// 1-based.
+    pub line: usize,
+}
+
+/// One line of output, with what could be told about it while it was read.
+pub struct Out {
+    pub text: String,
+    pub sev: Sev,
+    pub loc: Option<Loc>,
+}
+
+fn severity(text: &str) -> Sev {
+    let l = text.to_lowercase();
+    if l.contains("0 error") || l.contains("no error") || l.contains("0 failed") {
+        Sev::None
+    } else if l.starts_with("error") || ["error:", "error[", "[error]", "failed", "panicked", "fatal"].iter().any(|w| l.contains(w)) {
+        Sev::Error
+    } else if l.contains("warning") {
+        Sev::Warn
+    } else {
+        Sev::None
+    }
+}
+
+/// `file` and `line` as a place in `repo`, when the file exists there (inside the repository, no `..`).
+fn resolve(repo: &Path, file: &str, line: usize) -> Option<Loc> {
+    let file = file.strip_prefix("./").unwrap_or(file);
+    let path = Path::new(file);
+    if file.is_empty() || line == 0 || !(file.contains('.') || file.contains('/')) || path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return None;
+    }
+    let full = if path.is_absolute() { path.to_path_buf() } else { repo.join(path) };
+    let rel = full.strip_prefix(repo).ok()?;
+    full.is_file().then(|| Loc { file: rel.to_string_lossy().into_owned(), line })
+}
+
+/// The file and line in `token`: `path:12`, `path:12:5`, `path(12,5)` or `path:[12,5]`.
+fn split_loc(token: &str) -> Option<(&str, usize)> {
+    let number = |s: &str| s.chars().take_while(char::is_ascii_digit).collect::<String>().parse::<usize>().ok();
+    if let Some(open) = token.find('(').filter(|&i| i > 0) {
+        if let Some(n) = number(&token[open + 1..]) {
+            return Some((&token[..open], n));
+        }
+    }
+    if let Some(i) = token.find(":[") {
+        return number(&token[i + 2..]).map(|n| (&token[..i], n));
+    }
+    let (path, rest) = token.split_once(':')?;
+    number(rest).map(|n| (path, n))
+}
+
+/// The first place in the repository that `text` points at: compiler messages (`src/main.rs:12:5`,
+/// `--> src/main.rs:12:5`), test failures, stack traces, Python's `File "x.py", line 12` and Maven's `X.java:[12,5]`.
+fn locate(repo: &Path, text: &str) -> Option<Loc> {
+    if let Some(rest) = text.trim_start().strip_prefix("File \"") {
+        let (path, tail) = rest.split_once('"')?;
+        let n: String = tail.trim_start().strip_prefix(", line ")?.chars().take_while(char::is_ascii_digit).collect();
+        return resolve(repo, path, n.parse().ok()?);
+    }
+    text.split(|c: char| c.is_whitespace() || "\"'`<>".contains(c))
+        .map(|t| t.trim_matches(|c| "([{)]}:,;.".contains(c)))
+        .filter(|t| t.contains(':') || t.contains('('))
+        .find_map(|t| split_loc(t).and_then(|(file, line)| resolve(repo, file, line)))
+}
+
 /// Removes terminal escape sequences (colors, cursor movement, window titles) from a line of output.
 fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -306,6 +384,11 @@ fn tidy(raw: &[u8]) -> String {
 /// Runs `cmd` with `sh` in `repo` in the background. Output (stdout and stderr together, in order) arrives as
 /// `Msg::TaskLines` and the end as `Msg::TaskDone`, both carrying `id`.
 pub fn spawn(repo: &Path, cmd: &str, id: u64, tx: Sender<Msg>) -> Result<Handle, String> {
+    let root = repo.to_path_buf();
+    let read = move |raw: &[u8]| {
+        let text = tidy(raw);
+        Out { sev: severity(&text), loc: locate(&root, &text), text }
+    };
     let mut child = Command::new("sh")
         .arg("-c")
         .arg(format!("exec 2>&1\n{cmd}"))
@@ -332,7 +415,7 @@ pub fn spawn(repo: &Path, cmd: &str, id: u64, tx: Sender<Msg>) -> Result<Handle,
             pending.extend_from_slice(&buf[..n]);
             let mut lines = Vec::new();
             while let Some(end) = pending.iter().position(|&b| b == b'\n') {
-                lines.push(tidy(&pending[..end]));
+                lines.push(read(&pending[..end]));
                 pending.drain(..=end);
             }
             if !lines.is_empty() && tx.send(Msg::TaskLines { id, lines }).is_err() {
@@ -340,7 +423,7 @@ pub fn spawn(repo: &Path, cmd: &str, id: u64, tx: Sender<Msg>) -> Result<Handle,
             }
         }
         if !pending.is_empty() {
-            let _ = tx.send(Msg::TaskLines { id, lines: vec![tidy(&pending)] });
+            let _ = tx.send(Msg::TaskLines { id, lines: vec![read(&pending)] });
         }
         let code = child.wait().ok().and_then(|s| s.code());
         done.store(true, Ordering::Relaxed);
