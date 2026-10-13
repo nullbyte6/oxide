@@ -409,6 +409,16 @@ pub struct Confirm {
     pub back: Mode,
 }
 
+/// The question asked when a fetch finds that the GitHub repository does not exist yet.
+pub struct Visibility {
+    path: PathBuf,
+    pub slug: String,
+    /// The highlighted choice: private (true) or public (false).
+    pub private: bool,
+    /// The mode to return to afterwards.
+    pub back: Mode,
+}
+
 /// The pages of the new-project menu.
 #[derive(Clone, Copy, PartialEq)]
 pub enum ProjectStep {
@@ -555,6 +565,8 @@ pub enum Mode {
     Reflog,
     /// The worktree and submodule list (`App::trees`) is open.
     Trees,
+    /// Choosing the visibility of a GitHub repository about to be created (`App::visibility`).
+    Visibility,
     /// The remote list (`App::remotes`) is open.
     Remotes,
     /// The GitHub issue or pull request list (`App::gh`) is open.
@@ -633,6 +645,7 @@ pub struct App {
     pub tick: usize,
     pub quit: bool,
     pub confirm: Option<Confirm>,
+    pub visibility: Option<Visibility>,
     pub diff: Option<DiffView>,
     pub history: Option<HistoryView>,
     pub branches: Option<BranchView>,
@@ -777,6 +790,7 @@ impl App {
             tick: 0,
             quit: false,
             confirm: None,
+            visibility: None,
             diff: None,
             history: None,
             branches: None,
@@ -1175,6 +1189,9 @@ impl App {
                                 self.log(Level::Info, format!("  {}", line.trim()));
                             }
                         }
+                        Err(err) if matches!(label, "fetch" | "remote fetch") && err.contains("Repository not found") && self.offer_create(&path) => {
+                            self.log(Level::Warn, format!("{name}: the remote repository does not exist yet"));
+                        }
                         Err(err) => {
                             self.log(Level::Error, format!("{name}: {label} failed"));
                             let shown = match label {
@@ -1361,6 +1378,7 @@ impl App {
             Mode::Help => self.mode = Mode::Normal,
             Mode::Input(kind) => self.on_input_key(kind, key),
             Mode::Confirm => self.on_confirm_key(key),
+            Mode::Visibility => self.on_visibility_key(key),
             Mode::Palette => self.on_palette_key(key),
             Mode::Diff => self.on_diff_key(key),
             Mode::Picker => self.on_picker_key(key),
@@ -2597,6 +2615,38 @@ impl App {
             self.run_ops(confirm.jobs);
         } else {
             self.log(Level::Info, "cancelled");
+        }
+    }
+
+    /// Asks whether to create the missing GitHub repository behind `path`'s remote; false when the remote is not on GitHub.
+    fn offer_create(&mut self, path: &Path) -> bool {
+        let Some(slug) = git::remote_url(path).and_then(|u| github::slug(&u)) else { return false };
+        self.visibility = Some(Visibility { path: path.to_path_buf(), slug, private: true, back: self.mode });
+        self.mode = Mode::Visibility;
+        true
+    }
+
+    /// Arrow keys pick private or public, Enter creates the repository and fetches again, Esc skips it.
+    fn on_visibility_key(&mut self, key: KeyEvent) {
+        let Some(v) = self.visibility.as_mut() else {
+            self.mode = Mode::Normal;
+            return;
+        };
+        match key.code {
+            KeyCode::Left | KeyCode::Up | KeyCode::Right | KeyCode::Down | KeyCode::Tab => v.private = !v.private,
+            KeyCode::Char('p') => v.private = true,
+            KeyCode::Char('u') => v.private = false,
+            KeyCode::Enter => {
+                let v = self.visibility.take().unwrap();
+                self.mode = v.back;
+                self.log(Level::Info, format!("creating {} ({})", v.slug, if v.private { "private" } else { "public" }));
+                self.run_ops(vec![(v.path, Op::CreateRemote { slug: v.slug, private: v.private })]);
+            }
+            KeyCode::Esc => {
+                self.mode = self.visibility.take().map_or(Mode::Normal, |v| v.back);
+                self.log(Level::Info, "repository not created");
+            }
+            _ => {}
         }
     }
 

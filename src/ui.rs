@@ -117,9 +117,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     draw_footer(f, app, footer);
     // A pending confirmation is drawn on top of the view it was asked from.
-    let view = match (app.mode, &app.confirm) {
-        (Mode::Confirm, Some(c)) => c.back,
-        (mode, _) => mode,
+    let view = match (app.mode, &app.confirm, &app.visibility) {
+        (Mode::Confirm, Some(c), _) => c.back,
+        (Mode::Visibility, _, Some(v)) => v.back,
+        (mode, ..) => mode,
     };
     match view {
         Mode::Diff => draw_diff(f, app),
@@ -819,7 +820,7 @@ fn draw_log(f: &mut Frame, app: &App, area: Rect) {
 /// The bottom row shows the key bar unless `h` hid it. Prompts (text input, confirmations) always need it,
 /// and so does a message that is shown for a moment while the log panel is hidden.
 fn footer_height(app: &App) -> u16 {
-    u16::from(app.hints || app.toast().is_some() || matches!(app.mode, Mode::Input(_) | Mode::Confirm) || app.code.as_ref().is_some_and(|c| c.prompt.is_some()) || app.program_shown())
+    u16::from(app.hints || app.toast().is_some() || matches!(app.mode, Mode::Input(_) | Mode::Confirm | Mode::Visibility) || app.code.as_ref().is_some_and(|c| c.prompt.is_some()) || app.program_shown())
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
@@ -1023,6 +1024,19 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     if app.mode == Mode::Branches {
         let hints = [("↑↓", "move"), ("Enter", "switch"), ("n", "new"), ("d", "delete"), ("D", "force delete"), ("m", "merge"), ("Esc", "close")];
         f.render_widget(Paragraph::new(Line::from(hint_spans(&hints))), area);
+        return;
+    }
+
+    if let (Mode::Visibility, Some(v)) = (app.mode, &app.visibility) {
+        let pick = |on: bool| if on { hue(KEYCAP, WARN) } else { DIM };
+        let line = Line::from(vec![
+            Span::styled(format!(" {} does not exist; create it on GitHub? ", v.slug), hue(BOLD, WARN)),
+            Span::styled(" Private ", pick(v.private)),
+            Span::raw(" "),
+            Span::styled(" Public ", pick(!v.private)),
+            Span::styled("   ←→ choose   Enter create   Esc skip", DIM),
+        ]);
+        f.render_widget(Paragraph::new(line), area);
         return;
     }
 

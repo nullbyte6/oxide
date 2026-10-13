@@ -97,6 +97,8 @@ pub enum Op {
     RemoteRemove(String),
     /// Fetch one named remote.
     RemoteFetch(String),
+    /// Create the missing GitHub repository `slug` (private or public), then fetch.
+    CreateRemote { slug: String, private: bool },
     /// Apply one hunk of a diff (or some of its lines) to the index: stage it, or with `reverse` unstage it.
     Hunk { patch: String, reverse: bool },
     /// Undo a patch in the working tree: the hunk (or lines) of an unstaged diff is thrown away for good.
@@ -150,6 +152,7 @@ impl Op {
             Op::RemoteRename { .. } => "remote rename",
             Op::RemoteRemove(_) => "remote remove",
             Op::RemoteFetch(_) => "remote fetch",
+            Op::CreateRemote { .. } => "create remote",
             Op::Amend(_) => "amend",
             Op::Reset(_) => "reset",
             Op::Checkout(_) => "checkout",
@@ -851,6 +854,13 @@ fn undo_setup(repo: &Path) -> Result<String, String> {
 pub fn perform(repo: &Path, op: &Op) -> Result<String, String> {
     match op {
         Op::Fetch => run_all(repo, &["fetch", "--all", "--prune"]),
+        Op::CreateRemote { slug, .. } if slug.starts_with('-') => Err(format!("invalid repository '{slug}'")),
+        // Only the empty repository is created here; the local commits are pushed by the user afterwards.
+        Op::CreateRemote { slug, private } => {
+            let made = crate::github::gh_all(Some(repo), &["repo", "create", slug, if *private { "--private" } else { "--public" }])?;
+            let fetched = run_all(repo, &["fetch", "--all", "--prune"])?;
+            Ok(format!("{made}\n{fetched}").trim().to_string())
+        }
         // Fast-forward only: Oxide never creates surprise merge commits on pull.
         Op::Pull => run_all(repo, &["pull", "--ff-only"]),
         Op::Push => push(repo),
