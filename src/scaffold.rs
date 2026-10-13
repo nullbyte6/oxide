@@ -49,15 +49,34 @@ pub enum PackageKind {
     Module,
     /// A single dot-separated namespace (C#).
     Namespace,
+    /// The name Python code is imported by: one identifier, which becomes the folder under `src/`.
+    Importable,
+    /// A PHP namespace, parts separated by backslashes (`Acme\\App`), mapped to `src/` by PSR-4.
+    PhpNamespace,
 }
 
 impl PackageKind {
     /// Name of the menu page and of the field on it.
     pub fn noun(self) -> &'static str {
         match self {
-            PackageKind::Packages => "package",
+            PackageKind::Packages | PackageKind::Importable => "package",
             PackageKind::Module => "module",
-            PackageKind::Namespace => "namespace",
+            PackageKind::Namespace | PackageKind::PhpNamespace => "namespace",
+        }
+    }
+
+    /// Only one name is possible (everything but Java-style packages).
+    fn single(self) -> bool {
+        self != PackageKind::Packages
+    }
+
+    /// What a valid name is made of, for the error message.
+    fn rule(self) -> &'static str {
+        match self {
+            PackageKind::Packages | PackageKind::Namespace => "letters, digits, _ and dots; no leading digit",
+            PackageKind::Importable => "letters, digits and _; no leading digit",
+            PackageKind::PhpNamespace => "letters, digits and _ between \\; no leading digit",
+            PackageKind::Module => "letters, digits and . _ ~ - between slashes",
         }
     }
 
@@ -67,12 +86,14 @@ impl PackageKind {
             PackageKind::Packages => "Package names, separated by commas; the first one holds the main code.",
             PackageKind::Module => "Module path of go.mod, e.g. github.com/you/app.",
             PackageKind::Namespace => "Root namespace of the project, e.g. Company.App.",
+            PackageKind::Importable => "Name the code is imported by, e.g. my_app; it becomes the folder under src/.",
+            PackageKind::PhpNamespace => "Root namespace with backslashes, e.g. Acme\\App (PSR-4, mapped to src/).",
         }
     }
 }
 
 /// The question a package-like language asks, with its suggested answer. The suggestion may use `{pkg}`,
-/// `{slug}`, `{Pascal}` (`MyApp`) and `{user}`.
+/// `{slug}`, `{Pascal}` (`MyApp`), `{user}` and `{PascalUser}` (the owner's name in PascalCase).
 #[derive(Clone, Copy)]
 pub struct Package {
     pub kind: PackageKind,
@@ -133,16 +154,16 @@ const BUILTIN: &[Lang] = &[
         name: "Python",
         key: "python",
         ignore: "",
-        package: None,
+        package: Some(Package { kind: PackageKind::Importable, suggest: "{pkg}" }),
         variants: &[
             v("venv + pip", "src/ layout, pyproject.toml, .venv", &[
                 Run("python3 -m venv .venv"),
                 File("pyproject.toml", PY_PROJECT),
-                File("src/{pkg}/__init__.py", ""),
-                File("src/{pkg}/main.py", PY_MAIN),
+                File("src/{package}/__init__.py", ""),
+                File("src/{package}/main.py", PY_MAIN),
                 Dir("tests"),
             ]),
-            v("uv", "uv init --package", &[Run("uv init --package --name {pkg}"), Dir("tests")]),
+            v("uv", "uv init --package", &[Run("uv init --package --name {package}"), Dir("tests")]),
         ],
     },
     Lang {
@@ -272,10 +293,11 @@ const BUILTIN: &[Lang] = &[
         name: "PHP",
         key: "php",
         ignore: "",
-        package: None,
-        variants: &[v("Composer", "composer init, src/", &[
-            Run("composer init --no-interaction --name={user}/{pkg}"),
-            File("src/index.php", PHP_MAIN),
+        package: Some(Package { kind: PackageKind::PhpNamespace, suggest: "{PascalUser}\\{Pascal}" }),
+        variants: &[v("Composer", "composer.json (PSR-4), src/, tests/", &[
+            File("composer.json", PHP_COMPOSER),
+            File("src/Greeter.php", PHP_CLASS),
+            Dir("tests"),
         ])],
     },
     Lang {
@@ -467,7 +489,8 @@ impl Plan {
                 .replace("{slug}", &slug)
                 .replace("{user}", &user)
                 .replace("{Pascal}", &pascal)
-                .replace("{package_path}", &package.replace('.', "/"))
+                .replace("{package_path}", &package.replace(['.', '\\'], "/"))
+                .replace("{package_json}", &package.replace('\\', "\\\\"))
                 .replace("{package}", package)
         };
         let main = packages.first().map_or("", String::as_str);
@@ -592,6 +615,7 @@ pub fn default_package(root: &Path, lang: &Lang, holder: &str) -> Option<String>
         p.suggest
             .replace("{pkg}", &ident(&name, '_', "app"))
             .replace("{slug}", &ident(&name, '-', "app"))
+            .replace("{PascalUser}", &pascal(holder))
             .replace("{Pascal}", &pascal(&name))
             .replace("{user}", &ident(holder, '-', "user"))
     })
@@ -600,35 +624,37 @@ pub fn default_package(root: &Path, lang: &Lang, holder: &str) -> Option<String>
 /// What was typed on the package page, checked for `kind`: for packages, names separated by commas (the first
 /// holds the main code); for a module or namespace, exactly one. The error says what is wrong.
 pub fn parse_packages(text: &str, kind: PackageKind) -> Result<Vec<String>, String> {
+    // Identifiers joined by `sep`: letters, digits and `_`, none starting with a digit.
+    let joined = |name: &str, sep: Option<char>| {
+        let mut parts: Box<dyn Iterator<Item = &str>> = match sep {
+            Some(c) => Box::new(name.split(c)),
+            None => Box::new(std::iter::once(name)),
+        };
+        parts.all(|part| {
+            let mut chars = part.chars();
+            chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
+    };
     let names: Vec<&str> = text.split(',').map(str::trim).filter(|n| !n.is_empty()).collect();
     let mut out: Vec<String> = Vec::new();
     for name in &names {
-        let dotted = |name: &str| {
-            name.split('.').all(|part| {
-                let mut chars = part.chars();
-                chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-            })
-        };
         let ok = match kind {
-            PackageKind::Packages | PackageKind::Namespace => dotted(name),
+            PackageKind::Packages | PackageKind::Namespace => joined(name, Some('.')),
+            PackageKind::Importable => joined(name, None),
+            PackageKind::PhpNamespace => joined(name, Some('\\')),
             // A module path is a URL-like path: no spaces, no empty parts.
-            PackageKind::Module => {
-                name.split('/').all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric() || "._~-".contains(c)))
-            }
+            PackageKind::Module => name.split('/').all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric() || "._~-".contains(c))),
         };
         if !ok {
-            return Err(match kind {
-                PackageKind::Module => format!("'{name}' is not a module path (letters, digits and . _ ~ - between slashes)"),
-                _ => format!("'{name}' is not a valid {} (letters, digits, _ and dots; no leading digit)", kind.noun()),
-            });
+            return Err(format!("'{name}' is not a valid {} ({})", kind.noun(), kind.rule()));
         }
         if !out.iter().any(|p| p == name) {
             out.push((*name).to_string());
         }
     }
-    match (out.len(), kind) {
-        (0, _) => Err(format!("write a {} name", kind.noun())),
-        (n, PackageKind::Module | PackageKind::Namespace) if n > 1 => Err(format!("only one {} is possible", kind.noun())),
+    match out.len() {
+        0 => Err(format!("write a {} name", kind.noun())),
+        n if n > 1 && kind.single() => Err(format!("only one {} is possible", kind.noun())),
         _ => Ok(out),
     }
 }
@@ -964,7 +990,22 @@ clean:
 
 const CPP_MAIN: &str = "#include <iostream>\n\nint main() {\n    std::cout << \"Hello, world!\\n\";\n    return 0;\n}\n";
 
-const PHP_MAIN: &str = "<?php\n\ndeclare(strict_types=1);\n\necho \"Hello, world!\\n\";\n";
+const PHP_COMPOSER: &str = r##"{
+    "name": "{user}/{slug}",
+    "description": "{slug}",
+    "type": "project",
+    "require": {
+        "php": ">=8.1"
+    },
+    "autoload": {
+        "psr-4": {
+            "{package_json}\\": "src/"
+        }
+    }
+}
+"##;
+
+const PHP_CLASS: &str = "<?php\n\ndeclare(strict_types=1);\n\nnamespace {package};\n\nfinal class Greeter\n{\n    public function greet(): string\n    {\n        return 'Hello, world!';\n    }\n}\n";
 
 const RUBY_MAIN: &str = "# frozen_string_literal: true\n\nputs 'Hello, world!'\n";
 
