@@ -1590,7 +1590,7 @@ fn draw_help(f: &mut Frame) {
         ("i y B S", "GitHub: issues / pull requests / repo in browser / find & clone"),
         ("e / o", "yazi on the file or repository / file manager"),
         ("t / T", "embedded terminal in the repository, or in the highlighted file's folder from the changes list (Ctrl+T hides it)"),
-        ("K", "new project in an empty repository: language, build tool, license"),
+        ("K / X", "new project in an empty repository: language, build tool, license / undo that setup"),
         ("* / x / H", "pin / ignore the repository / show ignored ones"),
         ("r", "remotes: add / change URL / rename / remove / fetch one"),
         ("R / w", "rescan all roots / refresh CI states"),

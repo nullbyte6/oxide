@@ -1078,7 +1078,7 @@ impl App {
                             // Hook output (pre-commit, commit-msg ...) is part of a commit's result; show more of it.
                             let shown = match label {
                                 "commit" | "amend" => 12,
-                                "set up" => 30, // one line per step of the plan
+                                "set up" | "undo setup" => 30, // one line per step of the plan
                                 _ => 3,
                             };
                             for line in out.lines().filter(|l| !l.trim().is_empty()).take(shown) {
@@ -1352,6 +1352,7 @@ impl App {
             KeyCode::Char('e') => self.open_browser(),
             KeyCode::Char('t' | 'T') => self.open_terminal(),
             KeyCode::Char('K') => self.open_project(),
+            KeyCode::Char('X') => self.undo_setup(),
             KeyCode::Char('o') => self.open_files(),
             KeyCode::Char('/') => self.open_input(InputKind::Search),
             KeyCode::Char('R') => self.start_scan(),
@@ -2719,6 +2720,19 @@ impl App {
             plan: None,
         });
         self.mode = Mode::Project;
+    }
+
+    /// Asks to undo the last new-project setup of the selected repository, if one is recorded and still undoable.
+    fn undo_setup(&mut self) {
+        let Some((path, name)) = self.selected().map(|r| (r.path.clone(), r.name.clone())) else { return };
+        let Some(record) = git::setup_record(&path) else {
+            self.log(Level::Info, format!("{name}: no project setup to undo (K makes one)"));
+            return;
+        };
+        match git::undo_question(&path, &record) {
+            Ok(question) => self.ask(format!("{name}: {question}?"), vec![(path, Op::UndoSetup)]),
+            Err(why) => self.log(Level::Warn, format!("{name}: {why}")),
+        }
     }
 
     fn close_project(&mut self) {

@@ -720,7 +720,7 @@ pub fn undo_question(repo: &Path, rec: &SetupRecord) -> Result<String, String> {
     let more = if there.len() > shown.len() { ", …" } else { "" };
     let mut q = format!("undo the setup: delete {} files ({}{more})", files, shown.join(", "));
     if rec.commit.is_some() {
-        q.push_str(" and the setup commit (git reflog keeps it)");
+        q.push_str(" and the setup commit (its hash is logged, so it can be brought back)");
         let changed = run(repo, &["status", "--porcelain"]).map_or(0, |s| s.lines().count());
         if changed > 0 {
             q.push_str(&format!(", and {changed} change(s) made since"));
@@ -736,9 +736,12 @@ fn undo_setup(repo: &Path) -> Result<String, String> {
     let rec = setup_record(repo).ok_or("no setup was recorded for this repository")?;
     let there = undo_guard(repo, &rec)?;
     let mut lines = Vec::new();
-    if rec.commit.is_some() {
+    let mut recovery = None;
+    if let Some(commit) = &rec.commit {
         run_all(repo, &["update-ref", "-d", "HEAD"])?;
-        lines.push("removed the setup commit".to_string());
+        // The commit object stays in the repository until git cleans up, so it can be brought back.
+        let short = &commit[..commit.len().min(10)];
+        recovery = Some(format!("removed the setup commit {short} (git branch rescue {short} brings it back until git gc)"));
     }
     // Drop the files from the index first; untracked ones are simply not there.
     let mut args = vec!["rm", "-r", "--cached", "--ignore-unmatch", "-q", "--"];
@@ -757,6 +760,7 @@ fn undo_setup(repo: &Path) -> Result<String, String> {
     if let Some(p) = record_path(repo) {
         let _ = std::fs::remove_file(p);
     }
+    lines.extend(recovery); // last, so it is what the log panel still shows
     Ok(lines.join("\n"))
 }
 

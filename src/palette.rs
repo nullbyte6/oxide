@@ -46,6 +46,7 @@ pub const ENTRIES: &[Entry] = &[
     e("Open in yazi", "e", 'e'),
     e("Open the embedded terminal here", "t", 't'),
     e("Set up a new project in an empty repository", "K", 'K'),
+    e("Undo the last project setup", "X", 'X'),
     e("Open in the file manager", "o", 'o'),
     e("Delete the repository from disk", "D", 'D'),
     e("Pin or unpin the repository", "*", '*'),
