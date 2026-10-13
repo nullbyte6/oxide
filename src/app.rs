@@ -1256,6 +1256,7 @@ impl App {
             KeyCode::Char('U') => self.push_visible(),
             KeyCode::Char('e') => self.open_browser(),
             KeyCode::Char('t' | 'T') => self.open_terminal(),
+            KeyCode::Char('K') => self.open_project(),
             KeyCode::Char('o') => self.open_files(),
             KeyCode::Char('/') => self.open_input(InputKind::Search),
             KeyCode::Char('R') => self.start_scan(),

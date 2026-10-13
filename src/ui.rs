@@ -159,7 +159,7 @@ fn draw_project(f: &mut Frame, app: &mut App) {
     let (rows, extra) = match v.step {
         ProjectStep::Lang => (v.choices().len(), 4),
         ProjectStep::Variant => (LANGS[v.lang].variants.len(), 3),
-        ProjectStep::License => (LICENSES.len() + 1, 5),
+        ProjectStep::License => (LICENSES.len() + 1, 4),
         // The plan, a line for programs that are missing and the lines around them.
         ProjectStep::Confirm => (v.plan.as_ref().map_or(0, |p| p.actions.len() + usize::from(!p.missing.is_empty())), 7),
     };
@@ -243,7 +243,7 @@ fn draw_project(f: &mut Frame, app: &mut App) {
             let license = v.license().map_or("no license", |l| l.id);
             let mut lines = vec![
                 Line::from(Span::styled(format!("{} · {variant} · {license}", lang.name), BOLD)),
-                Line::from(Span::styled(format!("in {}", v.repo.display()), DIM)),
+                Line::from(Span::styled(fit(&format!("in {}", v.repo.display()), inner.width as usize), DIM)),
                 Line::raw(""),
             ];
             // Leave room for the rows below the plan: a blank line and the commit option.
@@ -1501,6 +1501,7 @@ fn draw_help(f: &mut Frame) {
         ("i y B S", "GitHub: issues / pull requests / repo in browser / find & clone"),
         ("e / o", "yazi on the file or repository / file manager"),
         ("t / T", "embedded terminal in the repository (Ctrl+T hides it, the shell keeps running)"),
+        ("K", "new project in an empty repository: language, build tool, license"),
         ("* / x / H", "pin / ignore the repository / show ignored ones"),
         ("r", "remotes: add / change URL / rename / remove / fetch one"),
         ("R / w", "rescan all roots / refresh CI states"),

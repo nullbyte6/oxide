@@ -243,7 +243,7 @@ pub const LANGS: &[Lang] = &[
     Lang {
         name: "Shell",
         key: "shell",
-        variants: &[v("Script", "bin/{slug}, lib/", &[
+        variants: &[v("Script", "bin/ script, lib/", &[
             File("bin/{slug}", SHELL_MAIN),
             Run("chmod +x bin/{slug}"),
             Dir("lib"),
@@ -252,7 +252,7 @@ pub const LANGS: &[Lang] = &[
     Lang {
         name: "Nim",
         key: "nim",
-        variants: &[v("Nimble", "{slug}.nimble, src/", &[
+        variants: &[v("Nimble", "nimble file, src/", &[
             File("{slug}.nimble", NIM_NIMBLE),
             File("src/{pkg}.nim", NIM_MAIN),
             Dir("tests"),

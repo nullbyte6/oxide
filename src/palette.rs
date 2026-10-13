@@ -44,6 +44,7 @@ pub const ENTRIES: &[Entry] = &[
     e("git init in a folder", "I", 'I'),
     e("Open in yazi", "e", 'e'),
     e("Open the embedded terminal here", "t", 't'),
+    e("Set up a new project in an empty repository", "K", 'K'),
     e("Open in the file manager", "o", 'o'),
     e("Delete the repository from disk", "D", 'D'),
     e("Pin or unpin the repository", "*", '*'),

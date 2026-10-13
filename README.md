@@ -27,6 +27,7 @@ screen, and lets you stage, commit, push, pull, fetch and merge without leaving 
 - **`git init` anywhere**: initialise a repository in any folder, existing or new, and see it in the list right away.
 - **GitHub** (needs the [`gh`](https://cli.github.com) CLI, logged in): browse a repository's issues and pull requests, read them, diff and check out pull requests, find repositories (yours or anyone's) and clone them, and open things in your browser.
 - **Jump out**: open the selected file or repository in yazi or the file manager.
+- **New project**: `K` in an empty repository opens a menu to set it up for 25 languages (Rust, Python, JavaScript, TypeScript, Go, Java, Kotlin, C, C++, C#, PHP, Ruby, Swift, Dart, Lua, Zig, Elixir, Haskell, Scala, R, Julia, Shell, Nim, Perl, Clojure): pick the language (type to filter), the build tool where there is a choice (Maven by default for Java), a license (11 offered, holder and year filled in) and review the exact commands and files before anything is done. *Other / manual…* opens the embedded terminal instead.
 - **Embedded terminal**: `t` / `T` opens a shell inside Oxide, in the selected repository, on a pseudo-terminal with colors, full-screen programs and scrollback; `Ctrl+T` hides it and the shell keeps running.
 - **Always current**: Oxide watches every repository's `.git` and the selected repository's working tree (Linux inotify, no extra dependency), so commits, checkouts and edits made elsewhere show up on their own; an optional timer fetches every repository.
 - **Languages**: what each repository is written in, by share of bytes and in each language's GitHub colour, counted locally from the committed files (no network, no linguist download).
@@ -104,6 +105,7 @@ oxide [OPTIONS] [PATH...]
 | `B` | Open the selected repository's GitHub page in the browser |
 | `S` | Find GitHub repositories and clone them (see below) |
 | `e` | Open [yazi](https://yazi-rs.github.io) in the repository, with the highlighted file revealed when the changes list is focused. Open files from yazi with your usual opener (e.g. nvim). Without yazi installed it falls back to `$VISUAL` / `$EDITOR` |
+| `K` | New project in an empty repository: language, build tool, license, then a plan to confirm (`c` toggles a first commit, `Esc` goes back a page) |
 | `t` / `T` | Open the embedded terminal (`$SHELL`) in the repository; `Ctrl+T` hides it, `Shift+PgUp` / `Shift+PgDn` scroll its history, `exit` closes it |
 | `o` | Open the repository folder in the file manager (`xdg-open`) |
 | `m` | Merge a branch into the current one (empty input merges the upstream) |
