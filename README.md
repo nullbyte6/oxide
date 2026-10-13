@@ -108,7 +108,7 @@ oxide [OPTIONS] [PATH...]
 | `S` | Find GitHub repositories and clone them (see below) |
 | `e` | Open [yazi](https://yazi-rs.github.io) in the repository, with the highlighted file revealed when the changes list is focused. Open files from yazi with your usual opener (e.g. nvim). Without yazi installed it falls back to `$VISUAL` / `$EDITOR` |
 | `K` | New project in an empty repository: language, build tool, license, then a plan to confirm (`c` toggles a first commit, `Esc` goes back a page) |
-| `t` / `T` | Open the embedded terminal (`$SHELL`) in the repository; `Ctrl+T` hides it, `Shift+PgUp` / `Shift+PgDn` scroll its history, `exit` closes it |
+| `t` / `T` | Open the embedded terminal (`$SHELL`) in the repository, or, with the changes list focused, in the folder of the highlighted file (each folder has its own shell, named in the title); `Ctrl+T` hides it, `Shift+PgUp` / `Shift+PgDn` scroll its history, `exit` closes it |
 | `o` | Open the repository folder in the file manager (`xdg-open`) |
 | `m` | Merge a branch into the current one (empty input merges the upstream) |
 | `r` | Remotes of the selected repository: add, change URL, rename, remove, fetch (see below) |

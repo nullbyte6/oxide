@@ -20,6 +20,7 @@ All notable changes to Oxide are recorded here, newest version first.
 - Update the Dart variant to write `pubspec.yaml`, `bin/<name>.dart`, `lib/<name>.dart` and `test/` itself instead of running `dart create`, which takes the package name from the directory and fails for names such as `my-app`.
 - Update the R variant to a package (`DESCRIPTION`, `NAMESPACE`, `R/hello.R`) instead of loose scripts, and the Perl variant to put its code in a module under `lib/` that `script/main.pl` loads.
 - Update the command palette shortcut from `Ctrl+P` to `Ctrl+K` (`:` still works); inside the palette `Ctrl+N` / `Ctrl+P` still move the selection.
+- Update `t` / `T` so that, with the changes list focused, the embedded terminal opens in the folder of the highlighted file (a whole untracked folder opens itself; a file whose folder is gone opens the nearest one left), with that folder in the title. Every folder has its own shell, which keeps running while hidden, and `T` on the same folder returns to it.
 - Update `t` to open the embedded terminal instead of suspending Oxide to run `$SHELL` outside it.
 
 ## [0.1.0] - 2026-10-12
